@@ -4,7 +4,9 @@
 #include <torch/csrc/utils/python_strings.h>
 
 namespace torch {
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
   static thread_local bool enable_torch_function = true;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
   PyObject* disabled_torch_function = nullptr;
 
   bool torch_function_enabled() {
@@ -52,6 +54,7 @@ static PyMethodDef DisableTorchFunction_methods[] = { // NOLINT
   {nullptr, nullptr, 0, nullptr}
 };
 
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 PyTypeObject DisableTorchFunctionType = {
   PyVarObject_HEAD_INIT(nullptr, 0)
   "torch._C.DisableTorchFunction",             /* tp_name */
@@ -160,6 +163,7 @@ static bool is_basic_python_type(PyTypeObject *tp)
 }
 
 inline bool has_torch_function_attr(PyObject* obj) {
+  // NOLINTNEXTLINE(clang-diagnostic-writable-strings)
   auto attr = PyObject_FastGetAttrString(obj, "__torch_function__");
   return (
     attr.ptr() != nullptr &&
@@ -180,6 +184,7 @@ auto check_has_torch_function(PyObject* obj) -> bool
 } // namespace torch
 
 inline bool sequence_has_torch_function(PyObject* args) {
+  // NOLINTNEXTLINE(bugprone-branch-clone)
   Py_ssize_t nargs = PySequence_Fast_GET_SIZE(args);
   for (Py_ssize_t i = 0; i < nargs; i++) {
     PyObject* obj = PySequence_Fast_GET_ITEM(args, i);

@@ -18,6 +18,7 @@ namespace fuser {
 namespace cuda {
 
 // TODO(kir): revisit this
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 thread_local GpuLower* active_gpu_lower = nullptr;
 
 void GpuLower::replaceSymbolicSizes() {
@@ -55,10 +56,12 @@ void GpuLower::replaceSymbolicSizes() {
       const Val* orig_size = id->extent();
 
       // Output sizes could have reduction axes, which isn't what gets output.
+      // NOLINTNEXTLINE(bugprone-branch-clone)
       if (id->isReduction()) {
         continue;
       } else if (id->getIterType() == IterType::BroadcastWithoutStride) {
         continue;
+        // NOLINTNEXTLINE(bugprone-branch-clone)
       } else if (id->getIterType() == IterType::BroadcastWithStride) {
         dim++;
         continue;
@@ -206,6 +209,7 @@ class TORCH_CUDA_CU_API GpuLower::KernelIrMapper : private OptInConstDispatch {
       default:
         TORCH_CHECK(false, "Unexpected expression type");
     }
+    // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
   }
 
   void handle(const Statement* node) override {

@@ -73,6 +73,7 @@ Tensor upsample_nearest2d(
           },
           VK_KERNEL(upsample_nearest2d),
           v_output.extents(),
+          adaptive_work_group_size(v_output.extents()),
           // Write-only access bypasses synchronization but inserts appropriate
           // barriers if necessary.
           v_output.image(

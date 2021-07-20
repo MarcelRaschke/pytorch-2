@@ -114,7 +114,7 @@ std::string used_cpu_capability() {
     case native::CPUCapability::AVX2:
       ss << "AVX2";
       break;
-#endif      
+#endif
     default:
       break;
   }
@@ -164,7 +164,7 @@ std::string show_config() {
   ss << "  - " << get_openmp_version() << "\n";
 #endif
 
-#ifdef USE_LAPACK
+#if AT_BUILD_WITH_LAPACK()
   // TODO: Actually record which one we actually picked
   ss << "  - LAPACK is enabled (usually provided by MKL)\n";
 #endif
@@ -194,6 +194,7 @@ std::string show_config() {
 
   // TODO: do HIP
   // TODO: do XLA
+  // TODO: do MLC
 
   return ss.str();
 }

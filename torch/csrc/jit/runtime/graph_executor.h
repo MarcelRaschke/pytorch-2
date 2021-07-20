@@ -9,6 +9,7 @@
 #include <torch/csrc/jit/runtime/interpreter.h>
 #include <torch/csrc/jit/runtime/variable_tensor_list.h>
 
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 C10_DECLARE_bool(torch_jit_enable_new_executor);
 
 namespace torch {
@@ -37,6 +38,7 @@ struct ExecutionPlan {
 // They is only valid only right after you call getDebugState() and should never
 // be used again once another GraphExecutor function is called.
 
+// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
 struct GraphExecutorState {
   const Graph* graph = nullptr;
   ExecutionPlan fallback; // XXX: members of this field are optional
@@ -85,6 +87,8 @@ struct TORCH_API GraphExecutor {
 
   static size_t getDefaultNumBailOuts();
 
+  void debugFlushCompilationCache();
+
  private:
   std::shared_ptr<GraphExecutorImplBase> pImpl;
 };
@@ -125,6 +129,8 @@ struct TORCH_API GraphOptimizerEnabledGuard {
 namespace detail {
 
 GraphExecutor* getGradExecutor(Operation& op);
+
+GraphExecutor* getDifferentiableGraphOpExecutor(Operation& op);
 
 // for debugging information we expose a way to get the last actually
 // run graph. Previous approaches allowed querying the GraphExecutor
