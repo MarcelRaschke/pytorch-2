@@ -11,3 +11,4 @@ six
 types-dataclasses
 typing_extensions
 dataclasses; python_version<"3.7"
+wheel>=0.38.0 # not directly required, pinned by Snyk to avoid a vulnerability
