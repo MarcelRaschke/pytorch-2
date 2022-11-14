@@ -8,3 +8,4 @@ tensorboard
 python-etcd>=0.4.5
 sphinx_copybutton
 sphinx-panels
+setuptools>=65.5.1 # not directly required, pinned by Snyk to avoid a vulnerability
