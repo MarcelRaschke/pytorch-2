@@ -112,7 +112,7 @@ jobs:
         run: |
           # Remove any artifacts from the previous checkouts
           git clean -fxd
-      - uses: actions/download-artifact@v2
+      - uses: actions/download-artifact@v4.1.7
         name: Download PyTorch Build Artifacts from GHA
         with:
           name: ${{ env.BUILD_ENVIRONMENT }}
@@ -232,7 +232,7 @@ jobs:
         run: |
           # Remove any artifacts from the previous checkouts
           git clean -fxd
-      - uses: actions/download-artifact@v2
+      - uses: actions/download-artifact@v4.1.7
         name: Download PyTorch Build Artifacts from GHA
         with:
           name: ${{ env.BUILD_ENVIRONMENT }}
