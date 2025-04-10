@@ -25,6 +25,7 @@ SET(WITH_BLAS "" CACHE STRING "Blas type [accelerate/acml/atlas/blis/generic/got
 # Old FindBlas
 INCLUDE(CheckCSourceRuns)
 INCLUDE(CheckFortranFunctionExists)
+INCLUDE(CheckFunctionExists)
 
 MACRO(Check_Fortran_Libraries LIBRARIES _prefix _name _flags _list)
   # This macro checks for the existence of the combination of fortran libraries
@@ -292,12 +293,17 @@ endif()
 # Generic BLAS library?
 if((NOT BLAS_LIBRARIES)
     AND ((NOT WITH_BLAS) OR (WITH_BLAS STREQUAL "generic")))
+  if(ENV{GENERIC_BLAS_LIBRARIES} STREQUAL "")
+    set(GENERIC_BLAS "blas")
+  else()
+    set(GENERIC_BLAS $ENV{GENERIC_BLAS_LIBRARIES})
+  endif()
   check_fortran_libraries(
   BLAS_LIBRARIES
   BLAS
   sgemm
   ""
-  "blas")
+  "${GENERIC_BLAS}")
   if (BLAS_LIBRARIES)
     set(BLAS_INFO "generic")
   endif(BLAS_LIBRARIES)
@@ -380,16 +386,6 @@ IF (BLAS_LIBRARIES)
   cmake_pop_check_state()
 ENDIF(BLAS_LIBRARIES)
 
-# Blas has bfloat16 support?
-IF(BLAS_LIBRARIES)
-  SET(CMAKE_REQUIRED_LIBRARIES ${BLAS_LIBRARIES})
-  check_function_exists("sbgemm_" BLAS_HAS_SBGEMM)
-  set(CMAKE_REQUIRED_LIBRARIES)
-  IF(BLAS_HAS_SBGEMM)
-    add_compile_options(-DBLAS_HAS_SBGEMM)
-  ENDIF(BLAS_HAS_SBGEMM)
-ENDIF(BLAS_LIBRARIES)
-
 # epilogue
 
 if(BLAS_LIBRARIES)
@@ -411,3 +407,14 @@ ENDIF(NOT BLAS_FIND_QUIETLY)
 
 # Do nothing is BLAS was found before
 ENDIF(NOT BLAS_FOUND)
+
+# Blas has bfloat16 support?
+IF(BLAS_LIBRARIES)
+  INCLUDE(CheckFunctionExists)
+  SET(CMAKE_REQUIRED_LIBRARIES ${BLAS_LIBRARIES})
+  check_function_exists("sbgemm_" BLAS_HAS_SBGEMM)
+  set(CMAKE_REQUIRED_LIBRARIES)
+  IF(BLAS_HAS_SBGEMM)
+    add_compile_options(-DBLAS_HAS_SBGEMM)
+  ENDIF(BLAS_HAS_SBGEMM)
+ENDIF(BLAS_LIBRARIES)

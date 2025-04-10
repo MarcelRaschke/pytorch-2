@@ -6,8 +6,7 @@
 #include <torch/csrc/jit/mobile/import.h>
 #include <torch/csrc/jit/mobile/module.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // Implementation of Android NNAPI Backend delegate
 
@@ -31,7 +30,7 @@ class NnapiBackend : public PyTorchBackendInterface {
   c10::impl::GenericDict compile(
       c10::IValue processed,
       c10::impl::GenericDict method_compile_spec) override {
-    // Wrap procesed in dictionary: {"forward": processed}
+    // Wrap processed in dictionary: {"forward": processed}
     auto dict = processed.toGenericDict();
     c10::Dict<c10::IValue, c10::IValue> handles(
         c10::StringType::get(), c10::AnyType::get());
@@ -64,7 +63,7 @@ class NnapiBackend : public PyTorchBackendInterface {
     auto inp_mem_fmts = dict.at("inp_mem_fmts").toIntList();
     TORCH_CHECK(tensorInp.size() == inp_mem_fmts.size());
     std::vector<at::Tensor> fixed_inputs;
-    for (int i = 0; i < tensorInp.size(); i++) {
+    for (auto i = 0U; i < tensorInp.size(); i++) {
       int fmt = inp_mem_fmts[i];
       // These constants match the values in DimOrder in serializer.py
       // 0: NCHW, 1: NHWC
@@ -84,7 +83,7 @@ class NnapiBackend : public PyTorchBackendInterface {
     // Adjust output memory formats
     auto out_mem_fmts = dict.at("out_mem_fmts").toIntList();
     TORCH_CHECK(outputs.size() == out_mem_fmts.size());
-    for (int i = 0; i < outputs.size(); i++) {
+    for (auto i = 0U; i < outputs.size(); i++) {
       int fmt = out_mem_fmts[i];
       // These constants match the values in DimOrder in serializer.py
       // 0: NCHW, 1: NHWC
@@ -107,7 +106,7 @@ class NnapiBackend : public PyTorchBackendInterface {
 
   // Runs once per model initialization
   // Cannot be moved to compile(), because init() requires actual inputs
-  void init(c10::IValue handle, c10::List<at::Tensor> inputs) {
+  void init(const c10::IValue& handle, const c10::List<at::Tensor>& inputs) {
     TORCH_CHECK(comp_ == nullptr);
     auto dict = handle.toGenericDict();
 
@@ -134,5 +133,4 @@ constexpr auto backend_name = "nnapi";
 static auto cls = torch::jit::backend<NnapiBackend>(backend_name);
 } // namespace
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

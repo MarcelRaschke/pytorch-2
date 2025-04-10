@@ -6,16 +6,13 @@
 #include <ATen/core/operator_name.h>
 #include <torch/csrc/jit/runtime/instruction.h>
 
-namespace torch {
-namespace jit {
-namespace mobile {
+namespace torch::jit::mobile {
 
 using Stack = std::vector<c10::IValue>;
 using DebugHandle = int64_t;
 
 class Function;
 
-// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
 struct Code {
   std::vector<Instruction> instructions_;
   std::vector<DebugHandle> debug_handles_;
@@ -30,8 +27,8 @@ struct Code {
   // be done in parseMethods().
   std::vector<mobile::Function*> functions_;
   size_t register_size_ = 0; // Aggregated output size.
+  // initialized means operators_ array is filled with operators
+  bool initialized = false;
 };
 
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::mobile

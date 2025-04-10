@@ -8,8 +8,7 @@
 #include <memory>
 #include <unordered_set>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 struct GuardElimination {
   GuardElimination(std::shared_ptr<Graph> graph)
@@ -89,7 +88,7 @@ struct GuardElimination {
     // uses on *all* parameters are moved to the same anchor node
     // and they may come in different order after the anchor node
     // e.g. (anchor, guard_x, guard_y, guard_x, guard_y)
-    // this pass recognizes contigious streches of guards and
+    // this pass recognizes contiguous stretches of guards and
     // keeps track of the guards it's seen for each def. the next time
     // the guard on the same def, it simply removes it.
     std::unordered_map<Value*, Node*> inputs_to_guards;
@@ -131,7 +130,7 @@ struct GuardElimination {
 
         // find all uses of the input that the guard node dominates
         std::vector<Use> uses = input->uses();
-        while (uses.size() > 0) {
+        while (!uses.empty()) {
           auto use = uses.at(uses.size() - 1);
           uses.pop_back();
 
@@ -463,5 +462,4 @@ void EliminateRedundantGuards(std::shared_ptr<Graph> graph) {
   ge.run();
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

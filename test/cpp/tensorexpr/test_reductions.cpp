@@ -50,8 +50,6 @@ TEST(Reductions, ReduceSum0D_1) {
 }
 
 TEST(Reductions, ReduceSum0D_2) {
-  const int M = 10;
-
   BufHandle b("b", {}, kFloat);
   std::vector<float> in(1);
   in[0] = 77.7;
@@ -1045,8 +1043,7 @@ TEST(Reductions, ReduceSplitRfactor) {
   SimpleIREvaluator cg(s, {b, c});
 
   cg.call({in, out});
-  for (const auto i : c10::irange(M)) {
-    (void)i; // Suppress unused variable warning
+  for ([[maybe_unused]] const auto i : c10::irange(M)) {
     ASSERT_EQ(out[0], 4950);
   }
 }
@@ -1094,6 +1091,7 @@ TEST(Reductions, ReduceOverSplitRfactor) {
 
   // Check the IR to verify the rfactored reduce is eliminated.
   // TODO: The alloc free should be eliminated here since it is size 0.
+  /*
   const std::string& verification_pattern =
       R"IR(
 # CHECK: Allocate(tmp_buf); // dtype=float, dims=[0]
@@ -1104,6 +1102,7 @@ TEST(Reductions, ReduceOverSplitRfactor) {
 # CHECK:   }
 # CHECK: }
 # CHECK: Free(tmp_buf);)IR";
+  */
   // TODO: rfactor output is not consistent yet, will fix (@nickg).
   // torch::jit::testing::FileCheck().run(verification_pattern, oss.str());
 }

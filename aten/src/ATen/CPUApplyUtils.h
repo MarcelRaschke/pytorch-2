@@ -1,12 +1,11 @@
 #pragma once
 
+#include <ATen/CollapseDims.h>
 #include <ATen/Parallel.h>
 #include <ATen/TensorUtils.h>
-#include <ATen/CollapseDims.h>
 #include <c10/util/irange.h>
-#include <limits>
-#include <utility>
 #include <cstring>
+#include <limits>
 
 namespace at {
 
@@ -60,24 +59,30 @@ struct strided_tensor_iter_fixed {
   T* data_ = NULL;
   int64_t dim_ = 0;
 
+  // NOLINTNEXTLINE(*array*)
   int64_t counter_[N] = {0};
+  // NOLINTNEXTLINE(*array*)
   int64_t sizes_[N] = {0};
+  // NOLINTNEXTLINE(*array*)
   int64_t strides_[N] = {0};
 
   strided_tensor_iter_fixed(strided_tensor_iter_fixed const&) = delete;
-  void operator=(strided_tensor_iter_fixed const& x) = delete;
-  strided_tensor_iter_fixed(strided_tensor_iter_fixed&&) = default;
-  strided_tensor_iter_fixed(Tensor& tensor, bool sort_strides = false)
+  strided_tensor_iter_fixed& operator=(strided_tensor_iter_fixed const& x) =
+      delete;
+  strided_tensor_iter_fixed(strided_tensor_iter_fixed&&) noexcept = default;
+  strided_tensor_iter_fixed& operator=(strided_tensor_iter_fixed&& x) noexcept =
+      default;
+  ~strided_tensor_iter_fixed() noexcept = default;
+  strided_tensor_iter_fixed(
+      Tensor& tensor,
+      [[maybe_unused]] bool sort_strides = false)
       : data_(tensor.data_ptr<T>()) {
-    (void)sort_strides; // Suppress unused variable warning
     std::memset(counter_, 0, sizeof(int64_t) * N);
     if (tensor.dim() > 0) {
       std::memcpy(
           sizes_, tensor.sizes().data(), tensor.dim() * sizeof(int64_t));
       std::memcpy(
-          strides_,
-          tensor.strides().data(),
-          tensor.dim() * sizeof(int64_t));
+          strides_, tensor.strides().data(), tensor.dim() * sizeof(int64_t));
     }
     dim_ = std::get<1>(collapse_dims(sizes_, strides_, tensor.ndimension()));
   }
@@ -95,8 +100,10 @@ struct strided_tensor_iter {
   std::vector<int64_t> strides_;
 
   strided_tensor_iter(strided_tensor_iter const&) = delete;
-  void operator=(strided_tensor_iter const& x) = delete;
-  strided_tensor_iter(strided_tensor_iter&&) = default;
+  strided_tensor_iter& operator=(strided_tensor_iter const& x) = delete;
+  strided_tensor_iter(strided_tensor_iter&&) noexcept = default;
+  strided_tensor_iter& operator=(strided_tensor_iter&&) noexcept = default;
+  ~strided_tensor_iter() noexcept = default;
   strided_tensor_iter(Tensor& tensor)
       : data_(tensor.data_ptr<T>()),
         dim_(tensor.ndimension()),
@@ -108,7 +115,7 @@ struct strided_tensor_iter {
 };
 
 inline bool _all_equal_numel(at::ArrayRef<Tensor> tensors) {
-  if (tensors.size() == 0)
+  if (tensors.empty())
     return true;
   int64_t all_numel = tensors[0].numel();
   for (const auto i : c10::irange(1, tensors.size())) {
@@ -138,7 +145,7 @@ inline bool _apply_preamble(ArrayRef<Tensor> tensors) {
   checkDeviceType("CPU_tensor_apply", tensors, kCPU);
   checkLayout("CPU_tensor_apply", tensors, kStrided);
   if (!_all_equal_numel(tensors))
-    AT_ERROR(_all_equal_numel_error(tensors));
+    TORCH_CHECK(false, _all_equal_numel_error(tensors));
   // An empty tensor has no elements
   for (auto& t : tensors)
     if (t.numel() == 0)
@@ -153,7 +160,7 @@ inline int64_t _max_dim_tensors(ArrayRef<Tensor> tensors) {
   return dim;
 }
 
-inline void iterate(int64_t /*size*/){};
+inline void iterate(int64_t /*size*/) {}
 
 template <typename Arg, typename... Args>
 inline void iterate(int64_t size, Arg& iter, Args&... iter_tail) {
@@ -164,7 +171,7 @@ inline void iterate(int64_t size, Arg& iter, Args&... iter_tail) {
 
 inline bool iterate_continue() {
   return true;
-};
+}
 
 template <typename Arg, typename... Args>
 inline bool iterate_continue(Arg& iter, Args&... iter_tail) {
@@ -174,7 +181,7 @@ inline bool iterate_continue(Arg& iter, Args&... iter_tail) {
 
 inline int64_t max_iterate_size() {
   return std::numeric_limits<int64_t>::max();
-};
+}
 
 template <typename Arg, typename... Args>
 inline int64_t max_iterate_size(Arg& iter, Args&... iter_tail) {
@@ -183,7 +190,7 @@ inline int64_t max_iterate_size(Arg& iter, Args&... iter_tail) {
       max_iterate_size(iter_tail...));
 }
 
-inline void iterate_overflow(){};
+inline void iterate_overflow() {}
 
 template <typename Arg, typename... Args>
 inline void iterate_overflow(Arg& iter, Args&... iter_tail) {
@@ -200,7 +207,7 @@ inline void iterate_overflow(Arg& iter, Args&... iter_tail) {
   iterate_overflow(iter_tail...);
 }
 
-inline void forward(int64_t /*offset*/){};
+inline void forward(int64_t /*offset*/) {}
 
 template <typename Arg, typename... Args>
 inline void forward(int64_t offset, Arg& iter, Args&... iter_tail) {
@@ -223,11 +230,14 @@ inline int64_t max_dim(Arg& iter, Args&... iter_tail) {
   return std::max(iter.dim_, max_dim(iter_tail...));
 }
 
-inline void apply_op(){};
+inline void apply_op() {}
 
 template <typename Op, typename... Args>
-inline void
-apply_op(int64_t numel, int64_t offset, const Op& op, Args... iters) {
+inline void apply_op(
+    int64_t numel,
+    int64_t offset,
+    const Op& op,
+    Args... iters) {
   // For 0-dim tensors
   if (numel == 1 && max_dim(iters...) == 0) {
     op(*iters.data_...);
@@ -278,8 +288,11 @@ inline void CPU_tensor_apply2(Tensor tensor1, Tensor tensor2, const Op op) {
 }
 
 template <typename scalar1, typename scalar2, typename scalar3, typename Op>
-inline void
-CPU_tensor_apply3(Tensor tensor1, Tensor tensor2, Tensor tensor3, const Op op) {
+inline void CPU_tensor_apply3(
+    Tensor tensor1,
+    Tensor tensor2,
+    Tensor tensor3,
+    const Op op) {
   if (!_apply_preamble({tensor1, tensor2, tensor3}))
     return;
   if (_max_dim_tensors({tensor1, tensor2, tensor3}) <= 8) {

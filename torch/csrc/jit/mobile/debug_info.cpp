@@ -9,8 +9,7 @@
 
 #include <c10/util/string_view.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -116,31 +115,38 @@ MobileDebugTable::MobileDebugTable(
     const std::shared_ptr<CompilationUnit>& cu) {
   ska::flat_hash_map<int64_t, SourceRange> source_range_map;
   const std::vector<std::string>& record_names = reader->getAllRecords();
-  const c10::string_view suffix(".debug_pkl");
+  constexpr std::string_view suffix(".debug_pkl");
   for (const auto& record_name : record_names) {
-    if (c10::string_view(record_name).ends_with(suffix)) {
-      at::DataPtr debug_data;
-      size_t debug_size{0};
-      std::tie(debug_data, debug_size) = reader->getRecord(record_name);
-      auto ivalues =
-          std::move(*jit::unpickle(
-                         reinterpret_cast<const char*>(debug_data.get()),
-                         debug_size,
-                         nullptr,
-                         {},
-                         c10::parseType)
-                         .toTuple())
-              .elements();
-      SourceRangeDeserializer deserializer;
-      for (auto& val : ivalues) {
-        auto tup_elems = std::move(*std::move(val).toTuple()).elements();
+    if (c10::ends_with(std::string_view(record_name), suffix)) {
+      auto [debug_data, debug_size] = reader->getRecord(record_name);
+      auto ivalueTuple = jit::unpickle(
+          reinterpret_cast<const char*>(debug_data.get()),
+          debug_size,
+          nullptr,
+          {},
+          c10::parseType);
+      const auto& ivalues = ivalueTuple.toTuple()->elements();
+      IValue lines;
+      std::unique_ptr<SourceRangeDeserializer> deserializer;
+      if (ivalues.size() == 3 && ivalues[0].isString() &&
+          kFormatWithStringTable == ivalues[0].toStringRef()) {
+        // new format
+        deserializer = std::make_unique<SourceRangeDeserializer>(ivalues[1]);
+        lines = ivalues[2];
+      } else {
+        deserializer = std::make_unique<SourceRangeDeserializer>();
+        lines = ivalueTuple;
+      }
+
+      for (auto& val : lines.toTuple()->elements()) {
+        auto tup_elems = std::move(*val.toTuple()).elements();
         // For BC we decode only tuples with 3 elements
         // assuming it contains
         // byte_offset, debug_handle (=source range tag), source range
         if (tup_elems.size() == 3) {
           int64_t debug_handle = tup_elems[kSourceRangeTagIndex].toInt();
           auto source_range =
-              deserializer.deserialize(tup_elems[kSourceRangeIndex]);
+              deserializer->deserialize(tup_elems[kSourceRangeIndex]);
           source_range_map.emplace(debug_handle, std::move(source_range));
         }
       }
@@ -148,13 +154,11 @@ MobileDebugTable::MobileDebugTable(
   }
   const std::string callstack_debug_file("callstack_debug_map.pkl");
   if (reader->hasRecord("callstack_debug_map.pkl")) {
-    at::DataPtr callstack_data;
-    size_t callstack_data_size{0};
-    std::tie(callstack_data, callstack_data_size) =
+    auto [callstack_data, callstack_data_size] =
         reader->getRecord(callstack_debug_file);
     CallStackDebugInfoUnpickler unpickler;
     callstack_ptr_map_ = unpickler.unpickle(
-        std::move(callstack_data), callstack_data_size, source_range_map, cu);
+        callstack_data, callstack_data_size, source_range_map, cu);
   }
 }
 
@@ -224,5 +228,4 @@ std::pair<std::string, std::string> MobileDebugTable::
       debug_infos, "top", top_module_type_name));
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

@@ -16,15 +16,14 @@
 #include <ATen/ops/ones_like_native.h>
 #endif
 
-#include <c10/util/Optional.h>
+#include <optional>
 
 #if defined(_MSC_VER)
 #include <BaseTsd.h>
 typedef SSIZE_T ssize_t;
 #endif
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace onnx {
 using namespace ::c10::onnx;
@@ -56,11 +55,11 @@ bool isNopTranspose(const std::vector<int64_t>& perm) {
 std::vector<int64_t> composeTransposes(
     const std::vector<int64_t>& t1,
     const std::vector<int64_t>& t2) {
-  AT_ASSERT(t1.size() == t2.size());
+  TORCH_INTERNAL_ASSERT(t1.size() == t2.size());
   std::vector<int64_t> ret;
   ret.reserve(t1.size());
   for (const auto& i : t2) {
-    AT_ASSERT(i < int64_t(t1.size()));
+    TORCH_INTERNAL_ASSERT(i < int64_t(t1.size()));
     ret.push_back(t1[i]);
   }
   return ret;
@@ -101,18 +100,18 @@ std::vector<size_t> getBroadcastPositions(Node* node) {
 // Determine whether `from` can broadcast to `to`, and if so at which
 // position. `from` must be a suffix of `to`, except that any
 // occurrences of 1 in `from` are treated as wildcards.
-c10::optional<size_t> fusibleExpandTo(
+std::optional<size_t> fusibleExpandTo(
     at::IntArrayRef from,
     at::IntArrayRef to) {
   if (from.size() > to.size()) {
-    return c10::nullopt;
+    return std::nullopt;
   }
 
   for (const auto i : c10::irange(from.size())) {
     auto fdim = from[from.size() - 1 - i];
     auto tdim = to[to.size() - 1 - i];
     if (fdim != 1 && fdim != tdim) {
-      return c10::nullopt;
+      return std::nullopt;
     }
   }
 
@@ -131,7 +130,7 @@ void fuseBroadcast(Block* b) {
 
     auto broadcast_positions = getBroadcastPositions(n);
     if (!broadcast_positions.empty()) {
-      AT_ASSERT(!n->hasAttribute(attr::axis));
+      TORCH_INTERNAL_ASSERT(!n->hasAttribute(attr::axis));
     }
 
     for (size_t position : broadcast_positions) {
@@ -156,7 +155,7 @@ void fuseBroadcast(Block* b) {
       }
 
       // Not all broadcasts are supported by ONNX broadcast.
-      c10::optional<size_t> axis = fusibleExpandTo(
+      std::optional<size_t> axis = fusibleExpandTo(
           unexpanded_input->type()
               ->expectRef<TensorType>()
               .sizes()
@@ -168,7 +167,7 @@ void fuseBroadcast(Block* b) {
               .sizes()
               .concrete_sizes()
               .value()); // to
-      if (axis == c10::nullopt) {
+      if (axis == std::nullopt) {
         continue;
       }
 
@@ -194,7 +193,7 @@ void fuseConsecutiveTransposes(Block* b) {
           composeTransposes(
               origInput->node()->is(attr::perm), n->is(attr::perm)));
       n->replaceInput(0, origInput->node()->input());
-      if (origInput->uses().size() == 0) {
+      if (origInput->uses().empty()) {
         origInput->node()->destroy();
       }
       continue;
@@ -233,7 +232,7 @@ void fuseTransposeIntoGemm(Block* b) {
             inp->node()->is(attr::perm) == simpleTransPerm) {
           n->replaceInput(i, inp->node()->input());
           n->i_(trans, n->hasAttribute(trans) ? !n->i(trans) : 1);
-          if (inp->uses().size() == 0) {
+          if (inp->uses().empty()) {
             inp->node()->destroy();
           }
         }
@@ -307,7 +306,7 @@ void pushPackingPastRnn(Block* b) {
     n->outputs().at(0)->replaceAllUsesWith(n->inputs().at(0));
 
     Value* batch_sizes = n->outputs().at(1);
-    while (batch_sizes->uses().size()) {
+    while (!batch_sizes->uses().empty()) {
       Use use_0 = batch_sizes->uses().at(0);
       Node* user = use_0.user;
       // Make calculation of max_batch_size not depend on batch_sizes.
@@ -332,8 +331,13 @@ void pushPackingPastRnn(Block* b) {
         shape->addInput(rnn_input);
         shape->copyMetadata(n);
         batch_sizes->replaceFirstUseWith(shape->output());
-        user->inputs().at(1)->node()->t_(
-            attr::value, at::native::ones_like(const_val_t));
+        // New Constant node is needed, as it might be shared
+        // with a Constant node 0 from others.
+        Node* gather_indices = b->owningGraph()->create(onnx::Constant, 1);
+        gather_indices->t_(attr::value, at::native::ones_like(const_val_t));
+        gather_indices->copyMetadata(n);
+        gather_indices->insertBefore(user);
+        user->replaceInput(1, gather_indices->output());
       }
       // Make RNN not depend on batch_sizes.
       else if (user == rnn) {
@@ -526,7 +530,7 @@ void fixDefaultRNNState(
   fixed_init_state->addInput(concated_dims->outputs()[0]);
   n->replaceInput(input_index, fixed_init_state->outputs()[0]);
 
-  if (initial_state->uses().size() == 0) {
+  if (initial_state->uses().empty()) {
     initial_state->node()->destroy();
   }
 }
@@ -542,7 +546,7 @@ void fixDefaultRnnHiddenState(Block* b, int opset_version) {
       continue;
     }
     // Hidden state is the sixth input for RNN, LSTM, GRU.
-    // See https://pytorch.org/docs/master/nn.html#torch.nn.RNN
+    // See https://pytorch.org/docs/main/nn.html#torch.nn.RNN
     if (n->inputs().size() < 6) {
       continue;
     }
@@ -561,7 +565,7 @@ void fixDefaultLstmCellState(Block* b, int opset_version) {
       continue;
     }
     // Cell state is the seventh input for LSTM.
-    // See https://pytorch.org/docs/master/nn.html#torch.nn.LSTM
+    // See https://pytorch.org/docs/main/nn.html#torch.nn.LSTM
     if (n->inputs().size() < 7) {
       continue;
     }
@@ -627,7 +631,7 @@ static void speculateOps(Block* block) {
 static void replaceInputWithList(Node* node, size_t i, ArrayRef<Value*> to) {
   node->removeInput(i);
   for (auto* to_val : to) {
-    AT_ASSERT(to_val->owningGraph() == node->owningGraph());
+    TORCH_INTERNAL_ASSERT(to_val->owningGraph() == node->owningGraph());
     node->insertInput(i++, to_val);
   }
 }
@@ -658,7 +662,7 @@ static void eraseListConstruct(Node* n, int opset_version) {
             i, std::vector<Value*>({concat_node->output()}));
       } else {
         if (opset_version >= OPSET_VERSION_11) {
-          c10::Symbol seq_node_kind = lc_node->inputs().size() > 0
+          c10::Symbol seq_node_kind = !lc_node->inputs().empty()
               ? onnx::SequenceConstruct
               : onnx::SequenceEmpty;
           Node* seq_node = block->owningGraph()->create(
@@ -705,7 +709,7 @@ static void eraseListUnpack(Node* n, int opset_version) {
       // onnx::SequenceAt was introduced in onnx opset version 11
       throw std::runtime_error(
           "Unsupported: ONNX export of prim::ListUnpack in opset " +
-          c10::to_string(opset_version) + ". Please try opset version 11.");
+          std::to_string(opset_version) + ". Please try opset version 11.");
     }
 
     auto g = n->owningGraph();
@@ -763,21 +767,26 @@ static void fuseListConstructListUnpack(Block* b) {
 
 // https://github.com/pytorch/pytorch/wiki/PyTorch-ONNX-exporter#quantized-model-export
 static void eraseTupleConstruct(Block* block) {
-  size_t index = 0;
+  std::vector<Value*> new_block_outputs;
+  bool found_tuple_construct = false;
   // TupleConstruct is generated from the symbolics in quantized domain, and
   // consumed by other quantized operators. The remained TupleConstruct should
   // be at the output of the blocks.
   for (auto* output : block->outputs()) {
     auto output_node = output->node();
     if (output_node->kind() == prim::TupleConstruct) {
-      block->eraseOutput(index);
-      size_t input_index = 0;
+      found_tuple_construct = true;
       for (auto* input : output_node->inputs()) {
-        block->insertOutput(index + (input_index++), input);
+        new_block_outputs.emplace_back(input);
       }
-      index += input_index;
     } else {
-      index++;
+      new_block_outputs.emplace_back(output);
+    }
+  }
+  if (found_tuple_construct) {
+    block->removeAllOutputs();
+    for (auto* output : new_block_outputs) {
+      block->registerOutput(output);
     }
   }
 }
@@ -808,8 +817,7 @@ static void fuseLogSoftmaxNllLoss(Block* b) {
     if (it->kind() == onnx::NegativeLogLikelihoodLoss) {
       auto prev = it->input(0)->node();
       Node* origNllLossNode = *it;
-      // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-      Node* origLogSoftmaxNode;
+      Node* origLogSoftmaxNode = nullptr;
 
       // Check for patterns especially in cases with autocasting enabled
       // in which a cast node is inserted before the NegativeLogLikelihoodLoss
@@ -850,7 +858,7 @@ static void fuseLogSoftmaxNllLoss(Block* b) {
         // (%10)
         origLogSoftmaxNode = prev->input(0)->node();
         auto transpose = origLogSoftmaxNode->input(0)->node();
-        if (transpose->inputs().size() > 0) {
+        if (!transpose->inputs().empty()) {
           origLogSoftmaxNode->replaceInput(0, transpose->inputs().at(0));
         }
       } else if (
@@ -1059,5 +1067,4 @@ void PeepholeOptimizeONNX(
   GRAPH_DUMP("After PeepholeOptimizeONNX", graph);
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

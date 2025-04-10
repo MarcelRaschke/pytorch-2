@@ -1,13 +1,10 @@
-#include <ATen/ATen.h>
+#pragma once
+#include <ATen/core/Tensor.h>
 #include <ATen/cuda/Atomic.cuh>
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/TensorUtils.h>
-#include <ATen/NativeFunctions.h>
 
-#pragma once
-
-namespace at {
-namespace native {
+namespace at::native {
 
 Tensor embedding_backward_cuda_kernel(
     const Tensor &grad,
@@ -21,4 +18,4 @@ Tensor embedding_backward_cuda_kernel(
     const Tensor &bag_size = Tensor(),
     const Tensor &per_sample_weights = Tensor());
 
-}}
+} // namespace at::native

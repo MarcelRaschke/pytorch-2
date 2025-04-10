@@ -1,14 +1,12 @@
 #pragma once
 
 #include <ATen/record_function.h>
+#include <c10/util/Synchronized.h>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string>
 
-namespace torch {
-namespace jit {
-namespace mobile {
+namespace torch::jit::mobile {
 /* The KernelDTypeTracer class handles the attachment and removal of a recording
  * callback that traces the invocation of code that handles specific dtypes in
  * kernel function implementations that are tagged with specific tags.
@@ -30,14 +28,10 @@ struct KernelDTypeTracer final {
   typedef std::map<std::string, std::set<std::string>> kernel_tags_type;
 
   KernelDTypeTracer();
-  static kernel_tags_type& getCalledKernelTags();
-  /* Protect concurrent writes into the map. */
-  static std::mutex& getMutex();
+  static c10::Synchronized<kernel_tags_type>& getCalledKernelTags();
 
   ~KernelDTypeTracer() {
     at::removeCallback(handle_);
   }
 };
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::mobile

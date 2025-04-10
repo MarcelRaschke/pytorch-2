@@ -1,16 +1,28 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <ATen/Config.h>
+
+#include <c10/util/error.h>
 
 #include <thread>
 
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/_nnpack_available_native.h>
+#include <ATen/ops/_nnpack_spatial_convolution_native.h>
+#include <ATen/ops/empty.h>
+#include <ATen/ops/zeros.h>
+#endif
+
 #if !AT_NNPACK_ENABLED()
 
-namespace at {
-namespace native {
+namespace at::native {
 
 at::Tensor _nnpack_spatial_convolution(
     const Tensor& input,
-    const Tensor& weight, const c10::optional<Tensor>& bias_opt,
+    const Tensor& weight, const std::optional<Tensor>& bias_opt,
     const IntArrayRef padding,
     const IntArrayRef stride) {
   throw std::runtime_error(
@@ -21,8 +33,7 @@ bool _nnpack_available() {
   return false;
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native
 
 #else
 
@@ -33,28 +44,21 @@ bool _nnpack_available() {
 #include <ATen/Parallel.h>
 #include <c10/util/irange.h>
 
-namespace at {
-namespace native {
+namespace at::native {
 
 static bool init_nnpack() {
-  static std::once_flag once_;
-  static bool nnpack_successfully_initialized_ = false;
+  const static nnp_status nnpack_status = nnp_initialize();
+  auto nnpack_successfully_initialized_ = (nnp_status_success == nnpack_status);
 
-  std::call_once(once_, []() {
-    const nnp_status nnpack_status = nnp_initialize();
-    nnpack_successfully_initialized_ = (nnp_status_success == nnpack_status);
-
-    if (nnpack_status != nnp_status_success) {
-      if (nnpack_status == nnp_status_out_of_memory) {
-        LOG(WARNING) << "Could not initialize NNPACK! Reason: Out of memory.";
-      } else if (nnpack_status == nnp_status_unsupported_hardware) {
-        LOG(WARNING) << "Could not initialize NNPACK! Reason: Unsupported hardware.";
-      } else {
-        LOG(WARNING) << "Could not initialize NNPACK! Reason: Unknown error!";
-      }
+  if (nnpack_status != nnp_status_success) {
+    if (nnpack_status == nnp_status_out_of_memory) {
+      LOG(WARNING) << "Could not initialize NNPACK! Reason: Out of memory.";
+    } else if (nnpack_status == nnp_status_unsupported_hardware) {
+      LOG(WARNING) << "Could not initialize NNPACK! Reason: Unsupported hardware.";
+    } else {
+      LOG(WARNING) << "Could not initialize NNPACK! Reason: Unknown error!";
     }
-  });
-
+  }
   return nnpack_successfully_initialized_;
 }
 
@@ -88,34 +92,46 @@ bool _nnpack_available() {
   return init_nnpack();
 }
 
+namespace {
+struct Workspace {
+  void* buffer = nullptr;
+  size_t size = 0;
+
+  void deallocate() {
+    if (buffer) {
+      // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+      std::free(buffer);
+      buffer = nullptr;
+    }
+  }
+
+  void allocate() {
+    deallocate();
+
+    // NNPack has alignment requirements
+    constexpr size_t nnpack_memory_alignment_boundary = 64;
+
+    // Won't work on Windows, but NNPACK doesn't support Windows either
+    auto res = posix_memalign(&buffer, nnpack_memory_alignment_boundary, size);
+    if (res != 0) {
+      TORCH_CHECK(false, "posix_memalign failed:", c10::utils::str_error(errno), " (", errno, ")");
+    }
+    return;
+  }
+
+  ~Workspace() {
+    deallocate();
+  }
+};
+} // namespace
+
 // Make thread_local for safety in cases where we have multiple threads running
 // Convs at once
-static thread_local void* workspace = nullptr;
-static thread_local size_t workspace_size = 0;
-
-static inline void deallocate_workspace() {
-  if (workspace) {
-    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
-    std::free(workspace);
-    workspace = nullptr;
-  }
-}
-
-static inline void allocate_workspace() {
-  if (workspace) {
-    deallocate_workspace();
-  }
-
-  // NNPack has alignment requirements
-  constexpr size_t nnpack_memory_alignment_boundary = 64;
-
-  // Won't work on Windows, but NNPACK doesn't support Windows either
-  posix_memalign(&workspace, nnpack_memory_alignment_boundary, workspace_size);
-}
+static thread_local Workspace workspace;
 
 Tensor _nnpack_spatial_convolution(
     const Tensor& input,
-    const Tensor& weight, const c10::optional<Tensor>& bias_opt,
+    const Tensor& weight, const std::optional<Tensor>& bias_opt,
     const IntArrayRef padding,
     const IntArrayRef stride) {
   // See [Note: hacky wrapper removal for optional tensor]
@@ -196,8 +212,8 @@ Tensor _nnpack_spatial_convolution(
       .height = (size_t)output.size(2),
   };
   const nnp_size output_subsample = {
-      .width = stride[1],
-      .height = stride[0],
+      .width = static_cast<std::size_t>(stride[1]),
+      .height = static_cast<std::size_t>(stride[0]),
   };
 
   const auto input_ = input.contiguous();
@@ -224,8 +240,8 @@ Tensor _nnpack_spatial_convolution(
             weight_.data_ptr<float>(),
             bias_.data_ptr<float>(),
             output.data_ptr<float>() + batch * output_size_per_batch,
-            workspace,
-            &workspace_size,
+            workspace.buffer,
+            &workspace.size,
             nnp_activation_identity,
             nullptr,
             nnpack_threadpool(),
@@ -251,8 +267,8 @@ Tensor _nnpack_spatial_convolution(
         weight_.data_ptr<float>(),
         bias_.data_ptr<float>(),
         output.data_ptr<float>(),
-        workspace,
-        &workspace_size,
+        workspace.buffer,
+        &workspace.size,
         nnp_activation_identity,
         nullptr,
         nnpack_threadpool(),
@@ -268,11 +284,11 @@ Tensor _nnpack_spatial_convolution(
     if (status != nnp_status_success) {
       throw std::runtime_error("NNPACK SpatialConvolution_updateOutput failed");
     }
-    allocate_workspace();
+    workspace.allocate();
   };
 
   // If no workspace created yet, allocate it
-  if (workspace == nullptr) {
+  if (workspace.buffer == nullptr) {
     size_and_allocate_ws();
   }
 
@@ -281,7 +297,7 @@ Tensor _nnpack_spatial_convolution(
 
   if (status == nnp_status_insufficient_buffer) {
     // Need to reallocate the workspace
-    deallocate_workspace();
+    workspace.deallocate();
     size_and_allocate_ws();
 
     // Try one more time
@@ -295,7 +311,6 @@ Tensor _nnpack_spatial_convolution(
   return output;
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native
 
 #endif // AT_NNPACK_ENABLED

@@ -3,8 +3,6 @@
 #include <torch/data/dataloader/base.h>
 #include <torch/data/worker_exception.h>
 
-#include <torch/csrc/utils/memory.h>
-
 #include <c10/util/Exception.h>
 #include <c10/util/irange.h>
 
@@ -12,8 +10,7 @@
 #include <thread>
 #include <utility>
 
-namespace torch {
-namespace data {
+namespace torch::data {
 
 /// A dataloader for stateless datasets.
 ///
@@ -40,20 +37,19 @@ class StatelessDataLoader : public DataLoaderBase<
       Dataset dataset,
       Sampler sampler,
       DataLoaderOptions options)
-      // NOLINTNEXTLINE(performance-move-const-arg)
-      : super(std::move(options)), sampler_(std::move(sampler)) {
-    for (const auto w : c10::irange(this->options_.workers))  {
+      : super(options), sampler_(std::move(sampler)) {
+    for (const auto w : c10::irange(this->options_.workers)) {
       // Here we copy the dataset into the worker thread closure. Each worker
       // has its own copy of the dataset. This means the dataset must be
       // trivially copiable, or else we don't expect more than one worker to
       // be in use.
-      (void)w; //Suppress unused variable warning
+      (void)w; // Suppress unused variable warning
       this->workers_.emplace_back(
           [this, dataset]() mutable { this->worker_thread(dataset); });
     }
     if (this->options_.workers == 0) {
       this->main_thread_dataset_ =
-          torch::make_unique<Dataset>(std::move(dataset));
+          std::make_unique<Dataset>(std::move(dataset));
     }
   }
 
@@ -67,12 +63,12 @@ class StatelessDataLoader : public DataLoaderBase<
 
   /// Queries the sampler for the next batch request (possibly progressing its
   /// internal state).
-  optional<BatchRequestType> get_batch_request() override {
+  std::optional<BatchRequestType> get_batch_request() override {
     auto indices = sampler_.next(this->options_.batch_size);
     if (!indices ||
         (indices->size() < this->options_.batch_size &&
          this->options_.drop_last)) {
-      return nullopt;
+      return std::nullopt;
     }
     AT_ASSERT(indices->size() > 0);
     return indices;
@@ -81,5 +77,4 @@ class StatelessDataLoader : public DataLoaderBase<
   /// The `Sampler` used to produce batch requests.
   Sampler sampler_;
 };
-} // namespace data
-} // namespace torch
+} // namespace torch::data

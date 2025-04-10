@@ -2,6 +2,7 @@
 
 #include <c10/macros/Export.h>
 #include <torch/csrc/jit/ir/ir.h>
+#include <torch/csrc/jit/passes/pass_manager.h>
 #include <torch/csrc/jit/runtime/profiling_record.h>
 
 /*
@@ -12,10 +13,7 @@
  * Registration is done in torch/csrc/jit/codegen/cuda/register_interface.cpp
  */
 
-namespace torch {
-namespace jit {
-namespace fuser {
-namespace cuda {
+namespace torch::jit::fuser::cuda {
 
 TORCH_API std::atomic<bool>& getCudaFusionGuardMode();
 
@@ -32,6 +30,7 @@ struct CudaFuserInterface {
   bool (*fn_can_fuse_n)(const Node*) = nullptr;
   void (*fn_insert_profile_inodes)(ProfilingRecord* pr) = nullptr;
   bool (*fn_profile_n)(const Node*) = nullptr;
+  bool (*fn_skip_n)(const std::string&, bool flip) = nullptr;
 };
 
 // Get interface, this is used by registration and user facing API internally
@@ -44,11 +43,10 @@ TORCH_API bool canFuseNode(const Node* node);
 TORCH_API void InsertProfileNodesForCUDAFuser(ProfilingRecord* pr);
 TORCH_API bool profileNode(const Node* node);
 
-TORCH_API bool complyWith(
-    const at::Tensor& tensor,
-    const c10::TensorTypePtr& guard_tensor_type);
+TORCH_API bool skipNode(const std::string& symbol_str, bool flip = true);
 
-} // namespace cuda
-} // namespace fuser
-} // namespace jit
-} // namespace torch
+TORCH_API bool isEnabled();
+TORCH_API bool setEnabled(bool is_enabled);
+TORCH_API bool canBeEnabled();
+
+} // namespace torch::jit::fuser::cuda

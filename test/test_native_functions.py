@@ -1,23 +1,63 @@
 # Owner(s): ["module: unknown"]
 
-from typing import Optional, List
+from typing import Optional
 import torch
-from torch.testing._internal.common_utils import TestCase, run_tests
+from torch.testing._internal.common_utils import TestCase, run_tests, skipIfTorchDynamo
 
 # End-to-end tests of features in native_functions.yaml
 
 
 class FloatListWrapperModule(torch.nn.Module):
-    def forward(self, values, incr: Optional[List[float]]):
+    def forward(self, values, incr: Optional[list[float]]):
         return torch._C._nn._test_optional_floatlist(values, incr)
 
 
 class IntListWrapperModule(torch.nn.Module):
-    def forward(self, values, incr: Optional[List[int]]):
+    def forward(self, values, incr: Optional[list[int]]):
         return torch._C._nn._test_optional_intlist(values, incr)
 
 
 class TestNativeFunctions(TestCase):
+
+    def _lists_with_str(self):
+        return [
+            ("foo",),
+            (2, "foo"),
+            ("foo", 3),
+            ["foo"],
+            [2, "foo"],
+            ["foo", 3],
+            "foo",
+        ]
+
+    def _test_raises_str_typeerror(self, fn):
+        for arg in self._lists_with_str():
+            self.assertRaisesRegex(TypeError, "str", lambda: fn(arg))
+            try:
+                fn(arg)
+            except TypeError as e:
+                print(e)
+
+    def test_symintlist_error(self):
+        x = torch.randn(1)
+        self._test_raises_str_typeerror(lambda arg: torch._C._nn.pad(x, arg))
+
+    def test_vararg_symintlist_error(self):
+        self._test_raises_str_typeerror(lambda arg: torch.rand(arg))
+        self._test_raises_str_typeerror(lambda arg: torch.rand(*arg))
+
+    def test_symintlist_error_with_overload_but_is_unique(self):
+        x = torch.randn(1)
+        y = torch.randn(1)
+        self._test_raises_str_typeerror(lambda arg: x.set_(y, 0, arg))
+
+    def test_symintlist_error_with_overload(self):
+        x = torch.randn(1)
+        self._test_raises_str_typeerror(lambda arg: x.view(arg))
+
+    def test_intlist_error_with_overload(self):
+        x = torch.randn(1)
+        self._test_raises_str_typeerror(lambda arg: torch._C._nn.pad(x, arg))
 
     #
     # optional float list
@@ -41,6 +81,7 @@ class TestNativeFunctions(TestCase):
             return torch._C._nn._test_optional_floatlist(values, const)
         return torch.jit.trace(wrapper, torch.tensor([1.5, 2.5], dtype=torch.float))
 
+    @skipIfTorchDynamo("Not a suitable test for TorchDynamo")
     def test_optional_floatlist(self):
         self.do_test_optional_floatlist_with_module(FloatListWrapperModule())
         self.do_test_optional_floatlist_with_module(torch.jit.script(FloatListWrapperModule()))
@@ -55,7 +96,7 @@ class TestNativeFunctions(TestCase):
                 return traced_none(values)
             if const == [5.1, 4.1]:
                 return traced_list(values)
-            raise Exception("Invalid argument")
+            raise Exception("Invalid argument")  # noqa: TRY002
 
         self.do_test_optional_floatlist_with_module(fake_module)
 
@@ -94,6 +135,7 @@ class TestNativeFunctions(TestCase):
             return torch._C._nn._test_optional_intlist(values, const)
         return torch.jit.trace(wrapper, torch.tensor([1, 2], dtype=torch.int))
 
+    @skipIfTorchDynamo("Not a suitable test for TorchDynamo")
     def test_optional_intlist(self):
         self.do_test_optional_intlist_with_module(IntListWrapperModule())
         self.do_test_optional_intlist_with_module(torch.jit.script(IntListWrapperModule()))
@@ -108,12 +150,12 @@ class TestNativeFunctions(TestCase):
                 return traced_none(values)
             if const == [5, 4]:
                 return traced_list(values)
-            raise Exception("Invalid argument")
+            raise Exception("Invalid argument")  # noqa: TRY002
 
         self.do_test_optional_intlist_with_module(fake_module)
 
     def test_optional_intlist_invalid(self):
-        with self.assertRaisesRegex(TypeError, "must be .* not"):
+        with self.assertRaisesRegex(TypeError, "must be .* but found"):
             IntListWrapperModule()(torch.zeros(1), [0.5])
 
         with self.assertRaisesRegex(RuntimeError, "value of type .* instead found type"):
@@ -147,6 +189,7 @@ class TestNativeFunctions(TestCase):
             return torch._C._nn._test_optional_filled_intlist(values, const)
         return torch.jit.trace(wrapper, torch.tensor([1, 2], dtype=torch.int))
 
+    @skipIfTorchDynamo("Not a suitable test for TorchDynamo")
     def test_optional_filled_intlist(self):
 
         def f(n: int):
@@ -174,7 +217,7 @@ class TestNativeFunctions(TestCase):
                 return traced_none(values)
             if const == 10:
                 return traced_int(values)
-            raise Exception("Invalid argument")
+            raise Exception("Invalid argument")  # noqa: TRY002
 
         self.do_test_optional_filled_intlist_with_module(fake_module)
 

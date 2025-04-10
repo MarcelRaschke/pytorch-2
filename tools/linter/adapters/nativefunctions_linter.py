@@ -14,13 +14,16 @@ is simply to make sure that there is *some* configuration of ruamel that can rou
 the YAML, not to be prescriptive about it.
 """
 
-import ruamel.yaml  # type: ignore[import]
+from __future__ import annotations
+
 import argparse
 import json
 import sys
-from io import StringIO
 from enum import Enum
-from typing import NamedTuple, Optional
+from io import StringIO
+from typing import NamedTuple
+
+import ruamel.yaml  # type: ignore[import]
 
 
 class LintSeverity(str, Enum):
@@ -31,20 +34,21 @@ class LintSeverity(str, Enum):
 
 
 class LintMessage(NamedTuple):
-    path: Optional[str]
-    line: Optional[int]
-    char: Optional[int]
+    path: str | None
+    line: int | None
+    char: int | None
     code: str
     severity: LintSeverity
     name: str
-    original: Optional[str]
-    replacement: Optional[str]
-    description: Optional[str]
+    original: str | None
+    replacement: str | None
+    description: str | None
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="native functions linter", fromfile_prefix_chars="@",
+        description="native functions linter",
+        fromfile_prefix_chars="@",
     )
     parser.add_argument(
         "--native-functions-yml",
@@ -89,8 +93,8 @@ if __name__ == "__main__":
     if contents != new_contents:
         msg = LintMessage(
             path=args.native_functions_yml,
-            line=1,
-            char=1,
+            line=None,
+            char=None,
             code="NATIVEFUNCTIONS",
             severity=LintSeverity.ERROR,
             name="roundtrip inconsistency",

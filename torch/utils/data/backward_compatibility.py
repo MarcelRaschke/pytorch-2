@@ -1,8 +1,11 @@
-import torch.utils.data.graph_settings
+# mypy: allow-untyped-defs
+from typing_extensions import deprecated as _deprecated
 
 
+@_deprecated(
+    "Usage of `backward_compatibility.worker_init_fn` is deprecated "
+    "as `DataLoader` automatically applies sharding in every worker",
+    category=FutureWarning,
+)
 def worker_init_fn(worker_id):
-    info = torch.utils.data.get_worker_info()
-    num_workers = info.num_workers
-    datapipe = info.dataset
-    torch.utils.data.graph_settings.apply_sharding(datapipe, num_workers, worker_id)
+    pass

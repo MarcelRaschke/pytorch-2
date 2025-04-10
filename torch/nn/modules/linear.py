@@ -1,12 +1,22 @@
+# mypy: allow-untyped-defs
 import math
+from typing import Any
 
 import torch
 from torch import Tensor
+from torch.nn import functional as F, init
 from torch.nn.parameter import Parameter, UninitializedParameter
-from .. import functional as F
-from .. import init
-from .module import Module
+
 from .lazy import LazyModuleMixin
+from .module import Module
+
+
+__all__ = [
+    "Bilinear",
+    "Identity",
+    "LazyLinear",
+    "Linear",
+]
 
 
 class Identity(Module):
@@ -29,17 +39,20 @@ class Identity(Module):
         torch.Size([128, 20])
 
     """
-    def __init__(self, *args, **kwargs):
-        super(Identity, self).__init__()
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__()
 
     def forward(self, input: Tensor) -> Tensor:
         return input
 
 
 class Linear(Module):
-    r"""Applies a linear transformation to the incoming data: :math:`y = xA^T + b`
+    r"""Applies an affine linear transformation to the incoming data: :math:`y = xA^T + b`.
 
     This module supports :ref:`TensorFloat32<tf32_on_ampere>`.
+
+    On certain ROCm devices, when using float16 inputs this module will use :ref:`different precision<fp16_on_mi200>` for backward.
 
     Args:
         in_features: size of each input sample
@@ -48,10 +61,10 @@ class Linear(Module):
             Default: ``True``
 
     Shape:
-        - Input: :math:`(*, H_{in})` where :math:`*` means any number of
-          dimensions including none and :math:`H_{in} = \text{in\_features}`.
-        - Output: :math:`(*, H_{out})` where all but the last dimension
-          are the same shape as the input and :math:`H_{out} = \text{out\_features}`.
+        - Input: :math:`(*, H_\text{in})` where :math:`*` means any number of
+          dimensions including none and :math:`H_\text{in} = \text{in\_features}`.
+        - Output: :math:`(*, H_\text{out})` where all but the last dimension
+          are the same shape as the input and :math:`H_\text{out} = \text{out\_features}`.
 
     Attributes:
         weight: the learnable weights of the module of shape
@@ -71,22 +84,31 @@ class Linear(Module):
         >>> print(output.size())
         torch.Size([128, 30])
     """
-    __constants__ = ['in_features', 'out_features']
+
+    __constants__ = ["in_features", "out_features"]
     in_features: int
     out_features: int
     weight: Tensor
 
-    def __init__(self, in_features: int, out_features: int, bias: bool = True,
-                 device=None, dtype=None) -> None:
-        factory_kwargs = {'device': device, 'dtype': dtype}
-        super(Linear, self).__init__()
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+    ) -> None:
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = Parameter(torch.empty((out_features, in_features), **factory_kwargs))
+        self.weight = Parameter(
+            torch.empty((out_features, in_features), **factory_kwargs)
+        )
         if bias:
             self.bias = Parameter(torch.empty(out_features, **factory_kwargs))
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -103,9 +125,7 @@ class Linear(Module):
         return F.linear(input, self.weight, self.bias)
 
     def extra_repr(self) -> str:
-        return 'in_features={}, out_features={}, bias={}'.format(
-            self.in_features, self.out_features, self.bias is not None
-        )
+        return f"in_features={self.in_features}, out_features={self.out_features}, bias={self.bias is not None}"
 
 
 # This class exists solely to avoid triggering an obscure error when scripting
@@ -114,29 +134,35 @@ class Linear(Module):
 # TODO: fail fast on quantization API usage error, then remove this class
 # and replace uses of it with plain Linear
 class NonDynamicallyQuantizableLinear(Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = True,
-                 device=None, dtype=None) -> None:
-        super().__init__(in_features, out_features, bias=bias,
-                         device=device, dtype=dtype)
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            in_features, out_features, bias=bias, device=device, dtype=dtype
+        )
 
 
 class Bilinear(Module):
-    r"""Applies a bilinear transformation to the incoming data:
-    :math:`y = x_1^T A x_2 + b`
+    r"""Applies a bilinear transformation to the incoming data: :math:`y = x_1^T A x_2 + b`.
 
     Args:
-        in1_features: size of each first input sample
-        in2_features: size of each second input sample
-        out_features: size of each output sample
-        bias: If set to False, the layer will not learn an additive bias.
+        in1_features: size of each first input sample, must be > 0
+        in2_features: size of each second input sample, must be > 0
+        out_features: size of each output sample, must be > 0
+        bias: If set to ``False``, the layer will not learn an additive bias.
             Default: ``True``
 
     Shape:
-        - Input1: :math:`(*, H_{in1})` where :math:`H_{in1}=\text{in1\_features}` and
+        - Input1: :math:`(*, H_\text{in1})` where :math:`H_\text{in1}=\text{in1\_features}` and
           :math:`*` means any number of additional dimensions including none. All but the last dimension
           of the inputs should be the same.
-        - Input2: :math:`(*, H_{in2})` where :math:`H_{in2}=\text{in2\_features}`.
-        - Output: :math:`(*, H_{out})` where :math:`H_{out}=\text{out\_features}`
+        - Input2: :math:`(*, H_\text{in2})` where :math:`H_\text{in2}=\text{in2\_features}`.
+        - Output: :math:`(*, H_\text{out})` where :math:`H_\text{out}=\text{out\_features}`
           and all but the last dimension are the same shape as the input.
 
     Attributes:
@@ -158,25 +184,37 @@ class Bilinear(Module):
         >>> print(output.size())
         torch.Size([128, 40])
     """
-    __constants__ = ['in1_features', 'in2_features', 'out_features']
+
+    __constants__ = ["in1_features", "in2_features", "out_features"]
     in1_features: int
     in2_features: int
     out_features: int
     weight: Tensor
 
-    def __init__(self, in1_features: int, in2_features: int, out_features: int, bias: bool = True,
-                 device=None, dtype=None) -> None:
-        factory_kwargs = {'device': device, 'dtype': dtype}
-        super(Bilinear, self).__init__()
+    def __init__(
+        self,
+        in1_features: int,
+        in2_features: int,
+        out_features: int,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+    ) -> None:
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        if in1_features <= 0:
+            raise ValueError(f"in1_features must be > 0, but got {in1_features}")
         self.in1_features = in1_features
         self.in2_features = in2_features
         self.out_features = out_features
-        self.weight = Parameter(torch.empty((out_features, in1_features, in2_features), **factory_kwargs))
+        self.weight = Parameter(
+            torch.empty((out_features, in1_features, in2_features), **factory_kwargs)
+        )
 
         if bias:
             self.bias = Parameter(torch.empty(out_features, **factory_kwargs))
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -189,8 +227,9 @@ class Bilinear(Module):
         return F.bilinear(input1, input2, self.weight, self.bias)
 
     def extra_repr(self) -> str:
-        return 'in1_features={}, in2_features={}, out_features={}, bias={}'.format(
-            self.in1_features, self.in2_features, self.out_features, self.bias is not None
+        return (
+            f"in1_features={self.in1_features}, in2_features={self.in2_features}, "
+            f"out_features={self.out_features}, bias={self.bias is not None}"
         )
 
 
@@ -227,9 +266,10 @@ class LazyLinear(LazyModuleMixin, Linear):
     weight: UninitializedParameter
     bias: UninitializedParameter  # type: ignore[assignment]
 
-    def __init__(self, out_features: int, bias: bool = True,
-                 device=None, dtype=None) -> None:
-        factory_kwargs = {'device': device, 'dtype': dtype}
+    def __init__(
+        self, out_features: int, bias: bool = True, device=None, dtype=None
+    ) -> None:
+        factory_kwargs = {"device": device, "dtype": dtype}
         # bias is hardcoded to False to avoid creating tensor
         # that will soon be overwritten.
         super().__init__(0, 0, False)
@@ -250,4 +290,13 @@ class LazyLinear(LazyModuleMixin, Linear):
                 if self.bias is not None:
                     self.bias.materialize((self.out_features,))
                 self.reset_parameters()
+        if self.in_features == 0:
+            assert input.shape[-1] == self.weight.shape[-1], (
+                f"The in_features inferred from input: {input.shape[-1]} "
+                f"is not equal to in_features from self.weight: "
+                f"{self.weight.shape[-1]}"
+            )
+            self.in_features = input.shape[-1]
+
+
 # TODO: PartialLinear - maybe in sparse?

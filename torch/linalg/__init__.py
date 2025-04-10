@@ -1,26 +1,27 @@
-# -*- coding: utf-8 -*-
-import sys
+from torch._C import (  # type: ignore[attr-defined]
+    _add_docstr,
+    _linalg,
+    _LinAlgError as LinAlgError,
+)
 
-import torch
-from torch._C import _add_docstr, _linalg  # type: ignore[attr-defined]
-
-LinAlgError = torch._C._LinAlgError  # type: ignore[attr-defined]
-
-Tensor = torch.Tensor
 
 common_notes = {
     "experimental_warning": """This function is "experimental" and it may change in a future PyTorch release.""",
     "sync_note": "When inputs are on a CUDA device, this function synchronizes that device with the CPU.",
     "sync_note_ex": r"When the inputs are on a CUDA device, this function synchronizes only when :attr:`check_errors`\ `= True`.",
-    "sync_note_has_ex": ("When inputs are on a CUDA device, this function synchronizes that device with the CPU. "
-                         "For a version of this function that does not synchronize, see :func:`{}`.")
+    "sync_note_has_ex": (
+        "When inputs are on a CUDA device, this function synchronizes that device with the CPU. "
+        "For a version of this function that does not synchronize, see :func:`{}`."
+    ),
 }
 
 
 # Note: This not only adds doc strings for functions in the linalg namespace, but
 # also connects the torch.linalg Python namespace to the torch._C._linalg builtins.
 
-cross = _add_docstr(_linalg.linalg_cross, r"""
+cross = _add_docstr(
+    _linalg.linalg_cross,
+    r"""
 linalg.cross(input, other, *, dim=-1, out=None) -> Tensor
 
 
@@ -28,8 +29,7 @@ Computes the cross product of two 3-dimensional vectors.
 
 Supports input of float, double, cfloat and cdouble dtypes. Also supports batches
 of vectors, for which it computes the product along the dimension :attr:`dim`.
-In this case, the output has the same batch dimensions as the inputs broadcast to
-a common shape.
+It broadcasts over the batch dimensions.
 
 Args:
     input (Tensor): the first input tensor.
@@ -39,9 +39,6 @@ Args:
 Keyword args:
     out (Tensor, optional): the output tensor. Ignored if `None`. Default: `None`.
 
-Raises:
-    RuntimeError: If after broadcasting :attr:`input`\ `.size(\ `:attr:`dim`\ `) != 3`
-                  or :attr:`other`\ `.size(\ `:attr:`dim`\ `) != 3`.
 Example:
     >>> a = torch.randn(4, 3)
     >>> a
@@ -68,9 +65,12 @@ Example:
             [ 1.4119, -2.6163,  0.1073],
             [ 0.3957, -1.9666, -1.0840],
             [ 0.2956, -0.3357,  0.2139]])
-""")
+""",
+)
 
-cholesky = _add_docstr(_linalg.linalg_cholesky, r"""
+cholesky = _add_docstr(
+    _linalg.linalg_cholesky,
+    r"""
 linalg.cholesky(A, *, upper=False, out=None) -> Tensor
 
 Computes the Cholesky decomposition of a complex Hermitian or real symmetric positive-definite matrix.
@@ -83,16 +83,18 @@ the **Cholesky decomposition** of a complex Hermitian or real symmetric positive
 
     A = LL^{\text{H}}\mathrlap{\qquad L \in \mathbb{K}^{n \times n}}
 
-where :math:`L` is a lower triangular matrix and
+where :math:`L` is a lower triangular matrix with real positive diagonal (even in the complex case) and
 :math:`L^{\text{H}}` is the conjugate transpose when :math:`L` is complex, and the transpose when :math:`L` is real-valued.
 
 Supports input of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
 the output has the same batch dimensions.
 
-""" + fr"""
-.. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + rf"""
+.. note:: {common_notes["sync_note_has_ex"].format("torch.linalg.cholesky_ex")}
+"""
+    + r"""
 
 .. seealso::
 
@@ -140,9 +142,12 @@ Examples::
     >>> L = torch.linalg.cholesky(A)
     >>> torch.dist(L @ L.mT, A)
     tensor(5.8747e-16, dtype=torch.float64)
-""")
+""",
+)
 
-cholesky_ex = _add_docstr(_linalg.linalg_cholesky_ex, r"""
+cholesky_ex = _add_docstr(
+    _linalg.linalg_cholesky_ex,
+    r"""
 linalg.cholesky_ex(A, *, upper=False, check_errors=False, out=None) -> (Tensor, Tensor)
 
 Computes the Cholesky decomposition of a complex Hermitian or real
@@ -167,11 +172,13 @@ and the decomposition could not be completed.
 ``info`` filled with zeros indicates that the decomposition was successful.
 If ``check_errors=True`` and ``info`` contains positive integers, then a RuntimeError is thrown.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note_ex"]}
 
 .. warning:: {common_notes["experimental_warning"]}
-""" + r"""
+"""
+    + r"""
 
 .. seealso::
         :func:`torch.linalg.cholesky` is a NumPy compatible variant that always checks for errors.
@@ -201,9 +208,12 @@ Examples::
     >>> info
     tensor(0, dtype=torch.int32)
 
-""")
+""",
+)
 
-inv = _add_docstr(_linalg.linalg_inv, r"""
+inv = _add_docstr(
+    _linalg.linalg_inv,
+    r"""
 linalg.inv(A, *, out=None) -> Tensor
 
 Computes the inverse of a square matrix if it exists.
@@ -226,9 +236,11 @@ Supports input of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices
 then the output has the same batch dimensions.
 
-""" + fr"""
-.. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + rf"""
+.. note:: {common_notes["sync_note_has_ex"].format("torch.linalg.inv_ex")}
+"""
+    + r"""
 
 .. note::
     Consider using :func:`torch.linalg.solve` if possible for multiplying a matrix on the left by
@@ -236,7 +248,7 @@ then the output has the same batch dimensions.
 
         linalg.solve(A, B) == linalg.inv(A) @ B  # When B is a matrix
 
-    It is always prefered to use :func:`~solve` when possible, as it is faster and more
+    It is always preferred to use :func:`~solve` when possible, as it is faster and more
     numerically stable than computing the inverse explicitly.
 
 .. seealso::
@@ -266,7 +278,7 @@ Examples::
 
     >>> A = torch.randn(2, 3, 4, 4)  # Batch of matrices
     >>> Ainv = torch.linalg.inv(A)
-    >>> torch.dist(A @ Ainv, torch.eye(4)))
+    >>> torch.dist(A @ Ainv, torch.eye(4))
     tensor(1.9073e-06)
 
     >>> A = torch.randn(4, 4, dtype=torch.complex128)  # Complex matrix
@@ -276,9 +288,54 @@ Examples::
 
 .. _invertible:
     https://en.wikipedia.org/wiki/Invertible_matrix#The_invertible_matrix_theorem
-""")
+""",
+)
 
-inv_ex = _add_docstr(_linalg.linalg_inv_ex, r"""
+solve_ex = _add_docstr(
+    _linalg.linalg_solve_ex,
+    r"""
+linalg.solve_ex(A, B, *, left=True, check_errors=False, out=None) -> (Tensor, Tensor)
+
+A version of :func:`~solve` that does not perform error checks unless :attr:`check_errors`\ `= True`.
+It also returns the :attr:`info` tensor returned by `LAPACK's getrf`_.
+
+"""
+    + rf"""
+.. note:: {common_notes["sync_note_ex"]}
+
+.. warning:: {common_notes["experimental_warning"]}
+"""
+    + r"""
+
+Args:
+    A (Tensor): tensor of shape `(*, n, n)` where `*` is zero or more batch dimensions.
+
+Keyword args:
+    left (bool, optional): whether to solve the system :math:`AX=B` or :math:`XA = B`. Default: `True`.
+    check_errors (bool, optional): controls whether to check the content of ``infos`` and raise
+                                   an error if it is non-zero. Default: `False`.
+    out (tuple, optional): tuple of two tensors to write the output to. Ignored if `None`. Default: `None`.
+
+Returns:
+    A named tuple `(result, info)`.
+
+Examples::
+
+    >>> A = torch.randn(3, 3)
+    >>> Ainv, info = torch.linalg.solve_ex(A)
+    >>> torch.dist(torch.linalg.inv(A), Ainv)
+    tensor(0.)
+    >>> info
+    tensor(0, dtype=torch.int32)
+
+.. _LAPACK's getrf:
+    https://www.netlib.org/lapack/explore-html/dd/d9a/group__double_g_ecomputational_ga0019443faea08275ca60a734d0593e60.html
+""",
+)
+
+inv_ex = _add_docstr(
+    _linalg.linalg_inv_ex,
+    r"""
 linalg.inv_ex(A, *, check_errors=False, out=None) -> (Tensor, Tensor)
 
 Computes the inverse of a square matrix if it is invertible.
@@ -298,11 +355,13 @@ Supports input of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
 the output has the same batch dimensions.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note_ex"]}
 
 .. warning:: {common_notes["experimental_warning"]}
-""" + r"""
+"""
+    + r"""
 
 .. seealso::
 
@@ -325,9 +384,12 @@ Examples::
     >>> info
     tensor(0, dtype=torch.int32)
 
-""")
+""",
+)
 
-det = _add_docstr(_linalg.linalg_det, r"""
+det = _add_docstr(
+    _linalg.linalg_det,
+    r"""
 linalg.det(A, *, out=None) -> Tensor
 
 Computes the determinant of a square matrix.
@@ -338,9 +400,8 @@ the output has the same batch dimensions.
 
 .. seealso::
 
-        :func:`torch.linalg.slogdet` computes the sign (resp. angle) and natural logarithm of the
-        absolute value (resp. modulus) of the determinant of real-valued (resp. complex)
-        square matrices.
+        :func:`torch.linalg.slogdet` computes the sign and natural logarithm of the absolute
+        value of the determinant of square matrices.
 
 Args:
     A (Tensor): tensor of shape `(*, n, n)` where `*` is zero or more batch dimensions.
@@ -357,28 +418,25 @@ Examples::
     >>> A = torch.randn(3, 2, 2)
     >>> torch.linalg.det(A)
     tensor([1.1990, 0.4099, 0.7386])
-""")
+""",
+)
 
-slogdet = _add_docstr(_linalg.linalg_slogdet, r"""
+slogdet = _add_docstr(
+    _linalg.linalg_slogdet,
+    r"""
 linalg.slogdet(A, *, out=None) -> (Tensor, Tensor)
 
 Computes the sign and natural logarithm of the absolute value of the determinant of a square matrix.
 
-For complex :attr:`A`, it returns the angle and the natural logarithm of the modulus of the
+For complex :attr:`A`, it returns the sign and the natural logarithm of the modulus of the
 determinant, that is, a logarithmic polar decomposition of the determinant.
+
+The determinant can be recovered as `sign * exp(logabsdet)`.
+When a matrix has a determinant of zero, it returns `(0, -inf)`.
 
 Supports input of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
 the output has the same batch dimensions.
-
-""" + fr"""
-.. note:: This function is computed using :func:`torch.lu`.
-          {common_notes["sync_note"]}
-""" + r"""
-
-.. note:: The determinant can be recovered as `sign * exp(logabsdet)`.
-
-.. note:: When a matrix has a determinant of zero, it returns `(0, -inf)`.
 
 .. seealso::
 
@@ -393,9 +451,9 @@ Keyword args:
 Returns:
     A named tuple `(sign, logabsdet)`.
 
-    `logabsdet` will always be real-valued, even when :attr:`A` is complex.
-
     `sign` will have the same dtype as :attr:`A`.
+
+    `logabsdet` will always be real-valued, even when :attr:`A` is complex.
 
 Examples::
 
@@ -406,13 +464,16 @@ Examples::
             [-1.6218, -0.9273, -0.0082]])
     >>> torch.linalg.det(A)
     tensor(-0.7576)
-    >>> torch.linalg.logdet(A)
+    >>> torch.logdet(A)
     tensor(nan)
     >>> torch.linalg.slogdet(A)
     torch.return_types.linalg_slogdet(sign=tensor(-1.), logabsdet=tensor(-0.2776))
-""")
+""",
+)
 
-eig = _add_docstr(_linalg.linalg_eig, r"""
+eig = _add_docstr(
+    _linalg.linalg_eig,
+    r"""
 linalg.eig(A, *, out=None) -> (Tensor, Tensor)
 
 Computes the eigenvalue decomposition of a square matrix if it exists.
@@ -432,11 +493,15 @@ Supports input of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
 the output has the same batch dimensions.
 
+The returned eigenvalues are not guaranteed to be in any specific order.
+
 .. note:: The eigenvalues and eigenvectors of a real matrix may be complex.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + r"""
 
 .. warning:: This function assumes that :attr:`A` is `diagonalizable`_ (for example, when all the
              eigenvalues are different). If it is not diagonalizable, the returned
@@ -451,9 +516,6 @@ the output has the same batch dimensions.
              by :math:`e^{i \phi}, \phi \in \mathbb{R}` produces another set of valid eigenvectors
              of the matrix.  For this reason, the loss function shall not depend on the phase of the
              eigenvectors, as this quantity is not well-defined.
-             This is checked when computing the gradients of this function. As such,
-             when inputs are on a CUDA device, this function synchronizes that device with the CPU
-             when computing the gradients.
              This is checked when computing the gradients of this function. As such,
              when inputs are on a CUDA device, the computation of the gradients
              of this function synchronizes that device with the CPU.
@@ -516,9 +578,12 @@ Examples::
 
 .. _diagonalizable:
     https://en.wikipedia.org/wiki/Diagonalizable_matrix#Definition
-""")
+""",
+)
 
-eigvals = _add_docstr(_linalg.linalg_eigvals, r"""
+eigvals = _add_docstr(
+    _linalg.linalg_eigvals,
+    r"""
 linalg.eigvals(A, *, out=None) -> Tensor
 
 Computes the eigenvalues of a square matrix.
@@ -537,13 +602,17 @@ Supports input of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
 the output has the same batch dimensions.
 
+The returned eigenvalues are not guaranteed to be in any specific order.
+
 .. note:: The eigenvalues of a real matrix may be complex, as the roots of a real polynomial may be complex.
 
           The eigenvalues of a matrix are always well-defined, even when the matrix is not diagonalizable.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + r"""
 
 .. seealso::
 
@@ -556,7 +625,7 @@ Keyword args:
     out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
 
 Returns:
-    A complex-valued tensor cointaining the eigenvalues even when :attr:`A` is real.
+    A complex-valued tensor containing the eigenvalues even when :attr:`A` is real.
 
 Examples::
 
@@ -567,9 +636,12 @@ Examples::
 
     >>> torch.dist(L, torch.linalg.eig(A).eigenvalues)
     tensor(2.4576e-07)
-""")
+""",
+)
 
-eigh = _add_docstr(_linalg.linalg_eigh, r"""
+eigh = _add_docstr(
+    _linalg.linalg_eigh,
+    r"""
 linalg.eigh(A, UPLO='L', *, out=None) -> (Tensor, Tensor)
 
 Computes the eigenvalue decomposition of a complex Hermitian or real symmetric matrix.
@@ -596,9 +668,11 @@ the output has the same batch dimensions.
 
 The eigenvalues are returned in ascending order.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + r"""
 
 .. note:: The eigenvalues of real symmetric or complex Hermitian matrices are always real.
 
@@ -621,6 +695,13 @@ The eigenvalues are returned in ascending order.
              the gradient will be numerically unstable, as it depends on the eigenvalues
              :math:`\lambda_i` through the computation of
              :math:`\frac{1}{\min_{i \neq j} \lambda_i - \lambda_j}`.
+
+.. warning:: User may see pytorch crashes if running `eigh` on CUDA devices with CUDA versions before 12.1 update 1
+             with large ill-conditioned matrices as inputs.
+             Refer to :ref:`Linear Algebra Numerical Stability<Linear Algebra Stability>` for more details.
+             If this is the case, user may (1) tune their matrix inputs to be less ill-conditioned,
+             or (2) use :func:`torch.backends.cuda.preferred_linalg_library` to
+             try other supported backends.
 
 .. seealso::
 
@@ -678,9 +759,12 @@ Examples::
     >>> L, Q = torch.linalg.eigh(A)
     >>> torch.dist(Q @ torch.diag_embed(L) @ Q.mH, A)
     tensor(1.5423e-15, dtype=torch.float64)
-""")
+""",
+)
 
-eigvalsh = _add_docstr(_linalg.linalg_eigvalsh, r"""
+eigvalsh = _add_docstr(
+    _linalg.linalg_eigvalsh,
+    r"""
 linalg.eigvalsh(A, UPLO='L', *, out=None) -> Tensor
 
 Computes the eigenvalues of a complex Hermitian or real symmetric matrix.
@@ -707,9 +791,11 @@ The eigenvalues are returned in ascending order.
 - If :attr:`UPLO`\ `= 'L'` (default), only the lower triangular part of the matrix is used in the computation.
 - If :attr:`UPLO`\ `= 'U'`, only the upper triangular part of the matrix is used.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + r"""
 
 .. seealso::
 
@@ -725,7 +811,7 @@ Keyword args:
     out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
 
 Returns:
-    A real-valued tensor cointaining the eigenvalues even when :attr:`A` is complex.
+    A real-valued tensor containing the eigenvalues even when :attr:`A` is complex.
     The eigenvalues are returned in ascending order.
 
 Examples::
@@ -744,26 +830,29 @@ Examples::
     tensor([[ 2.5797,  3.4629],
             [-4.1605,  1.3780],
             [-3.1113,  2.7381]], dtype=torch.float64)
-""")
+""",
+)
 
-householder_product = _add_docstr(_linalg.linalg_householder_product, r"""
+householder_product = _add_docstr(
+    _linalg.linalg_householder_product,
+    r"""
 householder_product(A, tau, *, out=None) -> Tensor
 
 Computes the first `n` columns of a product of Householder matrices.
 
 Let :math:`\mathbb{K}` be :math:`\mathbb{R}` or :math:`\mathbb{C}`, and
-let :math:`V \in \mathbb{K}^{m \times n}` be a matrix with columns :math:`v_i \in \mathbb{K}^m`
-for :math:`i=1,\ldots,m` with :math:`m \geq n`. Denote by :math:`w_i` the vector resulting from
-zeroing out the first :math:`i-1` compontents of :math:`v_i` and setting to `1` the :math:`i`-th.
+let :math:`A \in \mathbb{K}^{m \times n}` be a matrix with columns :math:`a_i \in \mathbb{K}^m`
+for :math:`i=1,\ldots,m` with :math:`m \geq n`. Denote by :math:`b_i` the vector resulting from
+zeroing out the first :math:`i-1` components of :math:`a_i` and setting to `1` the :math:`i`-th.
 For a vector :math:`\tau \in \mathbb{K}^k` with :math:`k \leq n`, this function computes the
 first :math:`n` columns of the matrix
 
 .. math::
 
-    H_1H_2 ... H_k \qquad\text{with}\qquad H_i = \mathrm{I}_m - \tau_i w_i w_i^{\text{H}}
+    H_1H_2 ... H_k \qquad\text{with}\qquad H_i = \mathrm{I}_m - \tau_i b_i b_i^{\text{H}}
 
-where :math:`\mathrm{I}_m` is the `m`-dimensional identity matrix and :math:`w^{\text{H}}` is the
-conjugate transpose when :math:`w` is complex, and the transpose when :math:`w` is real-valued.
+where :math:`\mathrm{I}_m` is the `m`-dimensional identity matrix and :math:`b^{\text{H}}` is the
+conjugate transpose when :math:`b` is complex, and the transpose when :math:`b` is real-valued.
 The output matrix is the same size as the input matrix :attr:`A`.
 
 See `Representation of Orthogonal or Unitary Matrices`_ for further details.
@@ -782,7 +871,7 @@ the output has the same batch dimensions.
         However, that function is not supported by autograd.
 
 .. warning::
-    Gradient computations are only well-defined if :math:`tau_i \neq \frac{1}{||v_i||^2}`.
+    Gradient computations are only well-defined if :math:`\tau_i \neq \frac{1}{||a_i||^2}`.
     If this condition is not met, no error will be thrown, but the gradient produced may contain `NaN`.
 
 Args:
@@ -819,9 +908,176 @@ Examples::
 
 .. _Representation of Orthogonal or Unitary Matrices:
     https://www.netlib.org/lapack/lug/node128.html
-""")
+""",
+)
 
-lstsq = _add_docstr(_linalg.linalg_lstsq, r"""
+ldl_factor = _add_docstr(
+    _linalg.linalg_ldl_factor,
+    r"""
+linalg.ldl_factor(A, *, hermitian=False, out=None) -> (Tensor, Tensor)
+
+Computes a compact representation of the LDL factorization of a Hermitian or symmetric (possibly indefinite) matrix.
+
+When :attr:`A` is complex valued it can be Hermitian (:attr:`hermitian`\ `= True`)
+or symmetric (:attr:`hermitian`\ `= False`).
+
+The factorization is of the form the form :math:`A = L D L^T`.
+If :attr:`hermitian` is `True` then transpose operation is the conjugate transpose.
+
+:math:`L` (or :math:`U`) and :math:`D` are stored in compact form in ``LD``.
+They follow the format specified by `LAPACK's sytrf`_ function.
+These tensors may be used in :func:`torch.linalg.ldl_solve` to solve linear systems.
+
+Supports input of float, double, cfloat and cdouble dtypes.
+Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
+the output has the same batch dimensions.
+
+"""
+    + rf"""
+.. note:: {common_notes["sync_note_has_ex"].format("torch.linalg.ldl_factor_ex")}
+"""
+    + r"""
+
+Args:
+    A (Tensor): tensor of shape `(*, n, n)` where `*` is zero or more batch dimensions
+                consisting of symmetric or Hermitian matrices.
+
+Keyword args:
+    hermitian (bool, optional): whether to consider the input to be Hermitian or symmetric.
+                                For real-valued matrices, this switch has no effect. Default: `False`.
+    out (tuple, optional): tuple of two tensors to write the output to. Ignored if `None`. Default: `None`.
+
+Returns:
+    A named tuple `(LD, pivots)`.
+
+Examples::
+
+    >>> A = torch.randn(3, 3)
+    >>> A = A @ A.mT # make symmetric
+    >>> A
+    tensor([[7.2079, 4.2414, 1.9428],
+            [4.2414, 3.4554, 0.3264],
+            [1.9428, 0.3264, 1.3823]])
+    >>> LD, pivots = torch.linalg.ldl_factor(A)
+    >>> LD
+    tensor([[ 7.2079,  0.0000,  0.0000],
+            [ 0.5884,  0.9595,  0.0000],
+            [ 0.2695, -0.8513,  0.1633]])
+    >>> pivots
+    tensor([1, 2, 3], dtype=torch.int32)
+
+.. _LAPACK's sytrf:
+    https://www.netlib.org/lapack/explore-html/d3/db6/group__double_s_ycomputational_gad91bde1212277b3e909eb6af7f64858a.html
+""",
+)
+
+ldl_factor_ex = _add_docstr(
+    _linalg.linalg_ldl_factor_ex,
+    r"""
+linalg.ldl_factor_ex(A, *, hermitian=False, check_errors=False, out=None) -> (Tensor, Tensor, Tensor)
+
+This is a version of :func:`~ldl_factor` that does not perform error checks unless :attr:`check_errors`\ `= True`.
+It also returns the :attr:`info` tensor returned by `LAPACK's sytrf`_.
+``info`` stores integer error codes from the backend library.
+A positive integer indicates the diagonal element of :math:`D` that is zero.
+Division by 0 will occur if the result is used for solving a system of linear equations.
+``info`` filled with zeros indicates that the factorization was successful.
+If ``check_errors=True`` and ``info`` contains positive integers, then a `RuntimeError` is thrown.
+
+"""
+    + rf"""
+.. note:: {common_notes["sync_note_ex"]}
+
+.. warning:: {common_notes["experimental_warning"]}
+"""
+    + r"""
+
+Args:
+    A (Tensor): tensor of shape `(*, n, n)` where `*` is zero or more batch dimensions
+                consisting of symmetric or Hermitian matrices.
+
+Keyword args:
+    hermitian (bool, optional): whether to consider the input to be Hermitian or symmetric.
+                                For real-valued matrices, this switch has no effect. Default: `False`.
+    check_errors (bool, optional): controls whether to check the content of ``info`` and raise
+                                   an error if it is non-zero. Default: `False`.
+    out (tuple, optional): tuple of three tensors to write the output to. Ignored if `None`. Default: `None`.
+
+Returns:
+    A named tuple `(LD, pivots, info)`.
+
+Examples::
+
+    >>> A = torch.randn(3, 3)
+    >>> A = A @ A.mT # make symmetric
+    >>> A
+    tensor([[7.2079, 4.2414, 1.9428],
+            [4.2414, 3.4554, 0.3264],
+            [1.9428, 0.3264, 1.3823]])
+    >>> LD, pivots, info = torch.linalg.ldl_factor_ex(A)
+    >>> LD
+    tensor([[ 7.2079,  0.0000,  0.0000],
+            [ 0.5884,  0.9595,  0.0000],
+            [ 0.2695, -0.8513,  0.1633]])
+    >>> pivots
+    tensor([1, 2, 3], dtype=torch.int32)
+    >>> info
+    tensor(0, dtype=torch.int32)
+
+.. _LAPACK's sytrf:
+    https://www.netlib.org/lapack/explore-html/d3/db6/group__double_s_ycomputational_gad91bde1212277b3e909eb6af7f64858a.html
+""",
+)
+
+ldl_solve = _add_docstr(
+    _linalg.linalg_ldl_solve,
+    r"""
+linalg.ldl_solve(LD, pivots, B, *, hermitian=False, out=None) -> Tensor
+
+Computes the solution of a system of linear equations using the LDL factorization.
+
+:attr:`LD` and :attr:`pivots` are the compact representation of the LDL factorization and
+are expected to be computed by :func:`torch.linalg.ldl_factor_ex`.
+:attr:`hermitian` argument to this function should be the same
+as the corresponding arguments in :func:`torch.linalg.ldl_factor_ex`.
+
+Supports input of float, double, cfloat and cdouble dtypes.
+Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
+the output has the same batch dimensions.
+
+"""
+    + rf"""
+.. warning:: {common_notes["experimental_warning"]}
+"""
+    + r"""
+
+Args:
+    LD (Tensor): the `n \times n` matrix or the batch of such matrices of size
+                      `(*, n, n)` where `*` is one or more batch dimensions.
+    pivots (Tensor): the pivots corresponding to the LDL factorization of :attr:`LD`.
+    B (Tensor): right-hand side tensor of shape `(*, n, k)`.
+
+Keyword args:
+    hermitian (bool, optional): whether to consider the decomposed matrix to be Hermitian or symmetric.
+                                For real-valued matrices, this switch has no effect. Default: `False`.
+    out (tuple, optional): output tensor. `B` may be passed as `out` and the result is computed in-place on `B`.
+                           Ignored if `None`. Default: `None`.
+
+Examples::
+
+    >>> A = torch.randn(2, 3, 3)
+    >>> A = A @ A.mT # make symmetric
+    >>> LD, pivots, info = torch.linalg.ldl_factor_ex(A)
+    >>> B = torch.randn(2, 3, 4)
+    >>> X = torch.linalg.ldl_solve(LD, pivots, B)
+    >>> torch.linalg.norm(A @ X - B)
+    >>> tensor(0.0001)
+""",
+)
+
+lstsq = _add_docstr(
+    _linalg.linalg_lstsq,
+    r"""
 torch.linalg.lstsq(A, B, rcond=None, *, driver=None) -> (Tensor, Tensor, Tensor, Tensor)
 
 Computes a solution to the least squares problem of a system of linear equations.
@@ -840,9 +1096,8 @@ Supports inputs of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if the inputs are batches of matrices then
 the output has the same batch dimensions.
 
-:attr:`driver` chooses the LAPACK/MAGMA function that will be used.
+:attr:`driver` chooses the backend function that will be used.
 For CPU inputs the valid values are `'gels'`, `'gelsy'`, `'gelsd`, `'gelss'`.
-For CUDA input, the only valid driver is `'gels'`, which assumes that :attr:`A` is full-rank.
 To choose the best driver on CPU consider:
 
 - If :attr:`A` is well-conditioned (its `condition number`_ is not too large), or you do not mind some precision loss.
@@ -855,21 +1110,23 @@ To choose the best driver on CPU consider:
   - `'gelsd'` (tridiagonal reduction and SVD)
   - But if you run into memory issues: `'gelss'` (full SVD).
 
+For CUDA input, the only valid driver is `'gels'`, which assumes that :attr:`A` is full-rank.
+
 See also the `full description of these drivers`_
 
 :attr:`rcond` is used to determine the effective rank of the matrices in :attr:`A`
 when :attr:`driver` is one of (`'gelsy'`, `'gelsd'`, `'gelss'`).
 In this case, if :math:`\sigma_i` are the singular values of `A` in decreasing order,
 :math:`\sigma_i` will be rounded down to zero if :math:`\sigma_i \leq \text{rcond} \cdot \sigma_1`.
-If :attr:`rcond`\ `= None` (default), :attr:`rcond` is set to the machine precision of the dtype of :attr:`A`.
+If :attr:`rcond`\ `= None` (default), :attr:`rcond` is set to the machine precision of the dtype of :attr:`A` times `max(m, n)`.
 
 This function returns the solution to the problem and some extra information in a named tuple of
 four tensors `(solution, residuals, rank, singular_values)`. For inputs :attr:`A`, :attr:`B`
-of shape `(*, m, n)`, `(*, m, k)` respectively, it cointains
+of shape `(*, m, n)`, `(*, m, k)` respectively, it contains
 
 - `solution`: the least squares solution. It has shape `(*, n, k)`.
 - `residuals`: the squared residuals of the solutions, that is, :math:`\|AX - B\|_F^2`.
-  It has shape equal to the batch dimensions of :attr:`A`.
+  It has shape `(*, k)`.
   It is computed when `m > n` and every matrix in :attr:`A` is full-rank,
   otherwise, it is an empty tensor.
   If :attr:`A` is a batch of matrices and any matrix in the batch is not full rank,
@@ -909,16 +1166,26 @@ Returns:
 
 Examples::
 
-    >>> A = torch.tensor([[[10, 2, 3], [3, 10, 5], [5, 6, 12]]], dtype=torch.float) # shape (1, 3, 3)
-    >>> B = torch.tensor([[[2, 5, 1], [3, 2, 1], [5, 1, 9]],
-                          [[4, 2, 9], [2, 0, 3], [2, 5, 3]]], dtype=torch.float) # shape (2, 3, 3)
+    >>> A = torch.randn(1,3,3)
+    >>> A
+    tensor([[[-1.0838,  0.0225,  0.2275],
+         [ 0.2438,  0.3844,  0.5499],
+         [ 0.1175, -0.9102,  2.0870]]])
+    >>> B = torch.randn(2,3,3)
+    >>> B
+    tensor([[[-0.6772,  0.7758,  0.5109],
+         [-1.4382,  1.3769,  1.1818],
+         [-0.3450,  0.0806,  0.3967]],
+        [[-1.3994, -0.1521, -0.1473],
+         [ 1.9194,  1.0458,  0.6705],
+         [-1.1802, -0.9796,  1.4086]]])
     >>> X = torch.linalg.lstsq(A, B).solution # A is broadcasted to shape (2, 3, 3)
     >>> torch.dist(X, torch.linalg.pinv(A) @ B)
-    tensor(2.0862e-07)
+    tensor(1.5152e-06)
 
     >>> S = torch.linalg.lstsq(A, B, driver='gelsd').singular_values
     >>> torch.dist(S, torch.linalg.svdvals(A))
-    tensor(5.7220e-06)
+    tensor(2.3842e-07)
 
     >>> A[:, 0].zero_()  # Decrease the rank of A
     >>> rank = torch.linalg.lstsq(A, B).rank
@@ -926,12 +1193,15 @@ Examples::
     tensor([2])
 
 .. _condition number:
-    https://pytorch.org/docs/master/linalg.html#torch.linalg.cond
+    https://pytorch.org/docs/main/linalg.html#torch.linalg.cond
 .. _full description of these drivers:
     https://www.netlib.org/lapack/lug/node27.html
-""")
+""",
+)
 
-matrix_power = _add_docstr(_linalg.linalg_matrix_power, r"""
+matrix_power = _add_docstr(
+    _linalg.linalg_matrix_power,
+    r"""
 matrix_power(A, n, *, out=None) -> Tensor
 
 Computes the `n`-th power of a square matrix for an integer `n`.
@@ -948,9 +1218,9 @@ as :attr:`A`. If :attr:`n` is negative, it returns the inverse of each matrix
     Consider using :func:`torch.linalg.solve` if possible for multiplying a matrix on the left by
     a negative power as, if :attr:`n`\ `> 0`::
 
-        matrix_power(torch.linalg.solve(A, B), n) == matrix_power(A, -n)  @ B
+        torch.linalg.solve(matrix_power(A, n), B) == matrix_power(A, -n)  @ B
 
-    It is always prefered to use :func:`~solve` when possible, as it is faster and more
+    It is always preferred to use :func:`~solve` when possible, as it is faster and more
     numerically stable than computing :math:`A^{-n}` explicitly.
 
 .. seealso::
@@ -987,9 +1257,12 @@ Examples::
             [[ 0.2640,  0.4571, -0.5511],
             [-1.0163,  0.3491, -1.5292],
             [-0.4899,  0.0822,  0.2773]]])
-""")
+""",
+)
 
-matrix_rank = _add_docstr(_linalg.linalg_matrix_rank, r"""
+matrix_rank = _add_docstr(
+    _linalg.linalg_matrix_rank,
+    r"""
 linalg.matrix_rank(A, *, atol=None, rtol=None, hermitian=False, out=None) -> Tensor
 
 Computes the numerical rank of a matrix.
@@ -1020,12 +1293,14 @@ of the singular values of :attr:`A` as returned by :func:`torch.linalg.svdvals`.
     This function has NumPy compatible variant `linalg.matrix_rank(A, tol, hermitian=False)`.
     However, use of the positional argument :attr:`tol` is deprecated in favor of :attr:`atol` and :attr:`rtol`.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: The matrix rank is computed using a singular value decomposition
           :func:`torch.linalg.svdvals` if :attr:`hermitian`\ `= False` (default) and the eigenvalue
           decomposition :func:`torch.linalg.eigvalsh` when :attr:`hermitian`\ `= True`.
           {common_notes["sync_note"]}
-""" + r"""
+"""
+    + r"""
 
 Args:
     A (Tensor): tensor of shape `(*, m, n)` where `*` is zero or more batch dimensions.
@@ -1072,14 +1347,15 @@ Examples::
     >>> torch.linalg.matrix_rank(A, atol=1.0, rtol=0.0, hermitian=True)
     tensor([[2, 2, 2, 1],
             [1, 2, 2, 2]])
-""")
+""",
+)
 
-norm = _add_docstr(_linalg.linalg_norm, r"""
+norm = _add_docstr(
+    _linalg.linalg_norm,
+    r"""
 linalg.norm(A, ord=None, dim=None, keepdim=False, *, out=None, dtype=None) -> Tensor
 
 Computes a vector or matrix norm.
-
-If :attr:`A` is complex valued, it computes the norm of :attr:`A`\ `.abs()`
 
 Supports input of float, double, cfloat and cdouble dtypes.
 
@@ -1207,21 +1483,24 @@ Using the :attr:`dim` argument to compute matrix norms::
     tensor([ 3.7417, 11.2250])
     >>> LA.norm(A[0, :, :]), LA.norm(A[1, :, :])
     (tensor(3.7417), tensor(11.2250))
-""")
+""",
+)
 
-vector_norm = _add_docstr(_linalg.linalg_vector_norm, r"""
-linalg.vector_norm(A, ord=2, dim=None, keepdim=False, *, dtype=None, out=None) -> Tensor
+vector_norm = _add_docstr(
+    _linalg.linalg_vector_norm,
+    r"""
+linalg.vector_norm(x, ord=2, dim=None, keepdim=False, *, dtype=None, out=None) -> Tensor
 
 Computes a vector norm.
 
-If :attr:`A` is complex valued, it computes the norm of :attr:`A`\ `.abs()`
+If :attr:`x` is complex valued, it computes the norm of :attr:`x`\ `.abs()`
 
 Supports input of float, double, cfloat and cdouble dtypes.
 
-This function does not necessarily treat multidimensonal :attr:`A` as a batch of
+This function does not necessarily treat multidimensional :attr:`x` as a batch of
 vectors, instead:
 
-- If :attr:`dim`\ `= None`, :attr:`A` will be flattened before the norm is computed.
+- If :attr:`dim`\ `= None`, :attr:`x` will be flattened before the norm is computed.
 - If :attr:`dim` is an `int` or a `tuple`, the norm will be computed over these dimensions
   and the other dimensions will be treated as batch dimensions.
 
@@ -1241,13 +1520,18 @@ other `int` or `float`   `sum(abs(x)^{ord})^{(1 / ord)}`
 
 where `inf` refers to `float('inf')`, NumPy's `inf` object, or any equivalent object.
 
+:attr:`dtype` may be used to perform the computation in a more precise dtype.
+It is semantically equivalent to calling ``linalg.vector_norm(x.to(dtype))``
+but it is faster in some cases.
+
 .. seealso::
 
         :func:`torch.linalg.matrix_norm` computes a matrix norm.
 
 Args:
-    A (Tensor): tensor, flattened by default, but this behavior can be
-        controlled using :attr:`dim`.
+    x (Tensor): tensor, flattened by default, but this behavior can be
+        controlled using :attr:`dim`.  (Note: the keyword argument
+        `input` can also be used as an alias for `x`.)
     ord (int, float, inf, -inf, 'fro', 'nuc', optional): order of norm. Default: `2`
     dim (int, Tuple[int], optional): dimensions over which to compute
         the norm. See above for the behavior when :attr:`dim`\ `= None`.
@@ -1257,12 +1541,14 @@ Args:
 
 Keyword args:
     out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
-    dtype (:class:`torch.dtype`, optional): If specified, the input tensor is cast to
-        :attr:`dtype` before performing the operation, and the returned tensor's type
-        will be :attr:`dtype`. Default: `None`
+    dtype (:class:`torch.dtype`, optional): type used to perform the accumulation and the return.
+        If specified, :attr:`x` is cast to :attr:`dtype` before performing the operation,
+        and the returned tensor's type will be :attr:`dtype` if real and of its real counterpart if complex.
+        :attr:`dtype` may be complex if :attr:`x` is complex, otherwise it must be real.
+        :attr:`x` should be convertible without narrowing to :attr:`dtype`. Default: None
 
 Returns:
-    A real-valued tensor, even when :attr:`A` is complex.
+    A real-valued tensor, even when :attr:`x` is complex.
 
 Examples::
 
@@ -1279,9 +1565,12 @@ Examples::
     tensor(5.4345)
     >>> LA.vector_norm(B, ord=3.5)
     tensor(5.4345)
-""")
+""",
+)
 
-matrix_norm = _add_docstr(_linalg.linalg_matrix_norm, r"""
+matrix_norm = _add_docstr(
+    _linalg.linalg_matrix_norm,
+    r"""
 linalg.matrix_norm(A, ord='fro', dim=(-2, -1), keepdim=False, *, dtype=None, out=None) -> Tensor
 
 Computes a matrix norm.
@@ -1353,21 +1642,30 @@ Examples::
     tensor([14.2829, 14.2829])
     >>> LA.matrix_norm(B, dim=(0, 2))
     tensor([ 3.1623, 10.0000, 17.2627])
-""")
+""",
+)
 
-matmul = _add_docstr(_linalg.linalg_matmul, r"""
+matmul = _add_docstr(
+    _linalg.linalg_matmul,
+    r"""
 linalg.matmul(input, other, *, out=None) -> Tensor
 
 Alias for :func:`torch.matmul`
-""")
+""",
+)
 
-diagonal = _add_docstr(_linalg.linalg_diagonal, r"""
+diagonal = _add_docstr(
+    _linalg.linalg_diagonal,
+    r"""
 linalg.diagonal(A, *, offset=0, dim1=-2, dim2=-1) -> Tensor
 
 Alias for :func:`torch.diagonal` with defaults :attr:`dim1`\ `= -2`, :attr:`dim2`\ `= -1`.
-""")
+""",
+)
 
-multi_dot = _add_docstr(_linalg.linalg_multi_dot, r"""
+multi_dot = _add_docstr(
+    _linalg.linalg_multi_dot,
+    r"""
 linalg.multi_dot(tensors, *, out=None)
 
 Efficiently multiplies two or more matrices by reordering the multiplications so that
@@ -1432,10 +1730,13 @@ Examples::
     >>> multi_dot((A, B, C))
     tensor([[ 26,  49],
             [ 80, 148]])
-""")
+""",
+)
 
-svd = _add_docstr(_linalg.linalg_svd, r"""
-linalg.svd(A, full_matrices=True, *, out=None) -> (Tensor, Tensor, Tensor)
+svd = _add_docstr(
+    _linalg.linalg_svd,
+    r"""
+linalg.svd(A, full_matrices=True, *, driver=None, out=None) -> (Tensor, Tensor, Tensor)
 
 Computes the singular value decomposition (SVD) of a matrix.
 
@@ -1457,7 +1758,7 @@ When `m > n` (resp. `m < n`) we can drop the last `m - n` (resp. `n - m`) column
 .. math::
 
     A = U \operatorname{diag}(S) V^{\text{H}}
-    \mathrlap{\qquad U \in \mathbb{K}^{m \times k}, S \in \mathbb{R}^k, V \in \mathbb{K}^{k \times n}}
+    \mathrlap{\qquad U \in \mathbb{K}^{m \times k}, S \in \mathbb{R}^k, V \in \mathbb{K}^{n \times k}}
 
 where :math:`\operatorname{diag}(S) \in \mathbb{K}^{k \times k}`.
 In this case, :math:`U` and :math:`V` also have orthonormal columns.
@@ -1472,6 +1773,18 @@ which corresponds to :math:`U`, :math:`S`, :math:`V^{\text{H}}` above.
 The singular values are returned in descending order.
 
 The parameter :attr:`full_matrices` chooses between the full (default) and reduced SVD.
+
+The :attr:`driver` kwarg may be used in CUDA with a cuSOLVER backend to choose the algorithm used to compute the SVD.
+The choice of a driver is a trade-off between accuracy and speed.
+
+- If :attr:`A` is well-conditioned (its `condition number`_ is not too large), or you do not mind some precision loss.
+
+  - For a general matrix: `'gesvdj'` (Jacobi method)
+  - If :attr:`A` is tall or wide (`m >> n` or `m << n`): `'gesvda'` (Approximate method)
+
+- If :attr:`A` is not well-conditioned or precision is relevant: `'gesvd'` (QR based)
+
+By default (:attr:`driver`\ `= None`), we call `'gesvdj'` and, if it fails, we fallback to `'gesvd'`.
 
 Differences with `numpy.linalg.svd`:
 
@@ -1533,6 +1846,9 @@ Args:
                                     `U` and `Vh`. Default: `True`.
 
 Keyword args:
+    driver (str, optional): name of the cuSOLVER method to be used. This keyword argument only works on CUDA inputs.
+        Available options are: `None`, `gesvd`, `gesvdj`, and `gesvda`.
+        Default: `None`.
     out (tuple, optional): output tuple of three tensors. Ignored if `None`.
 
 Returns:
@@ -1564,12 +1880,17 @@ Examples::
     >>> torch.dist(A, U @ torch.diag_embed(S) @ Vh)
     tensor(3.0957e-06)
 
+.. _condition number:
+    https://pytorch.org/docs/main/linalg.html#torch.linalg.cond
 .. _the resulting vectors will span the same subspace:
     https://en.wikipedia.org/wiki/Singular_value_decomposition#Singular_values,_singular_vectors,_and_their_relation_to_the_SVD
-""")
+""",
+)
 
-svdvals = _add_docstr(_linalg.linalg_svdvals, r"""
-linalg.svdvals(A, *, out=None) -> Tensor
+svdvals = _add_docstr(
+    _linalg.linalg_svdvals,
+    r"""
+linalg.svdvals(A, *, driver=None, out=None) -> Tensor
 
 Computes the singular values of a matrix.
 
@@ -1581,9 +1902,11 @@ The singular values are returned in descending order.
 
 .. note:: This function is equivalent to NumPy's `linalg.svd(A, compute_uv=False)`.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note"]}
-""" + r"""
+"""
+    + r"""
 
 .. seealso::
 
@@ -1593,6 +1916,10 @@ Args:
     A (Tensor): tensor of shape `(*, m, n)` where `*` is zero or more batch dimensions.
 
 Keyword args:
+    driver (str, optional): name of the cuSOLVER method to be used. This keyword argument only works on CUDA inputs.
+        Available options are: `None`, `gesvd`, `gesvdj`, and `gesvda`.
+        Check :func:`torch.linalg.svd` for details.
+        Default: `None`.
     out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
 
 Returns:
@@ -1607,9 +1934,12 @@ Examples::
 
     >>> torch.dist(S, torch.linalg.svd(A, full_matrices=False).S)
     tensor(2.4576e-07)
-""")
+""",
+)
 
-cond = _add_docstr(_linalg.linalg_cond, r"""
+cond = _add_docstr(
+    _linalg.linalg_cond,
+    r"""
 linalg.cond(A, p=None, *, out=None) -> Tensor
 
 Computes the condition number of a matrix with respect to a matrix norm.
@@ -1722,9 +2052,12 @@ Examples::
     >>> torch.linalg.cond(A)
     tensor([[4.6245],
             [4.5671]])
-""")
+""",
+)
 
-pinv = _add_docstr(_linalg.linalg_pinv, r"""
+pinv = _add_docstr(
+    _linalg.linalg_pinv,
+    r"""
 linalg.pinv(A, *, atol=None, rtol=None, hermitian=False, out=None) -> Tensor
 
 Computes the pseudoinverse (Moore-Penrose inverse) of a matrix.
@@ -1764,7 +2097,7 @@ of the singular values of :attr:`A` as returned by :func:`torch.linalg.svd`.
 
         torch.linalg.lstsq(A, B).solution == A.pinv() @ B
 
-    It is always prefered to use :func:`~lstsq` when possible, as it is faster and more
+    It is always preferred to use :func:`~lstsq` when possible, as it is faster and more
     numerically stable than computing the pseudoinverse explicitly.
 
 .. note::
@@ -1826,9 +2159,12 @@ Examples::
     https://en.wikipedia.org/wiki/Moore%E2%80%93Penrose_inverse#Existence_and_uniqueness
 .. _through the SVD:
     https://en.wikipedia.org/wiki/Moore%E2%80%93Penrose_inverse#Singular_value_decomposition_(SVD)
-""")
+""",
+)
 
-matrix_exp = _add_docstr(_linalg.linalg_matrix_exp, r"""
+matrix_exp = _add_docstr(
+    _linalg.linalg_matrix_exp,
+    r"""
 linalg.matrix_exp(A) -> Tensor
 
 Computes the matrix exponential of a square matrix.
@@ -1837,10 +2173,10 @@ Letting :math:`\mathbb{K}` be :math:`\mathbb{R}` or :math:`\mathbb{C}`,
 this function computes the **matrix exponential** of :math:`A \in \mathbb{K}^{n \times n}`, which is defined as
 
 .. math::
-    \mathrm{matrix_exp}(A) = \sum_{k=0}^\infty \frac{1}{k!}A^k \in \mathbb{K}^{n \times n}.
+    \mathrm{matrix\_exp}(A) = \sum_{k=0}^\infty \frac{1}{k!}A^k \in \mathbb{K}^{n \times n}.
 
 If the matrix :math:`A` has eigenvalues :math:`\lambda_i \in \mathbb{C}`,
-the matrix :math:`\mathrm{matrix_exp}(A)` has eigenvalues :math:`e^{\lambda_i} \in \mathbb{C}`.
+the matrix :math:`\mathrm{matrix\_exp}(A)` has eigenvalues :math:`e^{\lambda_i} \in \mathbb{C}`.
 
 Supports input of bfloat16, float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
@@ -1872,11 +2208,14 @@ Example::
     >>> torch.linalg.matrix_exp(A) # matrix_exp(A) = [[cos(pi/3), sin(pi/3)], [-sin(pi/3), cos(pi/3)]]
     tensor([[ 0.5000,  0.8660],
             [-0.8660,  0.5000]])
-""")
+""",
+)
 
 
-solve = _add_docstr(_linalg.linalg_solve, r"""
-linalg.solve(A, B, *, out=None) -> Tensor
+solve = _add_docstr(
+    _linalg.linalg_solve,
+    r"""
+linalg.solve(A, B, *, left=True, out=None) -> Tensor
 
 Computes the solution of a square system of linear equations with a unique solution.
 
@@ -1885,6 +2224,12 @@ this function computes the solution :math:`X \in \mathbb{K}^{n \times k}` of the
 :math:`A \in \mathbb{K}^{n \times n}, B \in \mathbb{K}^{n \times k}`, which is defined as
 
 .. math:: AX = B
+
+If :attr:`left`\ `= False`, this function returns the matrix :math:`X \in \mathbb{K}^{n \times k}` that solves the system
+
+.. math::
+
+    XA = B\mathrlap{\qquad A \in \mathbb{K}^{k \times k}, B \in \mathbb{K}^{n \times k}.}
 
 This system of linear equations has one solution if and only if :math:`A` is `invertible`_.
 This function assumes that :math:`A` is invertible.
@@ -1910,9 +2255,14 @@ Letting `*` be zero or more batch dimensions,
     It is possible to compute the solution of the system :math:`XA = B` by passing the inputs
     :attr:`A` and :attr:`B` transposed and transposing the output returned by this function.
 
-""" + fr"""
-.. note:: {common_notes["sync_note"]}
-""" + r"""
+.. note::
+    :attr:`A` is allowed to be a non-batched `torch.sparse_csr_tensor`, but only with `left=True`.
+
+"""
+    + rf"""
+.. note:: {common_notes["sync_note_has_ex"].format("torch.linalg.solve_ex")}
+"""
+    + r"""
 
 .. seealso::
 
@@ -1925,6 +2275,7 @@ Args:
                 according to the rules described above
 
 Keyword args:
+    left (bool, optional): whether to solve the system :math:`AX=B` or :math:`XA = B`. Default: `True`.
     out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
 
 Raises:
@@ -1963,9 +2314,12 @@ Examples::
 
 .. _invertible:
     https://en.wikipedia.org/wiki/Invertible_matrix#The_invertible_matrix_theorem
-""")
+""",
+)
 
-solve_triangular = _add_docstr(_linalg.linalg_solve_triangular, r"""
+solve_triangular = _add_docstr(
+    _linalg.linalg_solve_triangular,
+    r"""
 linalg.solve_triangular(A, B, *, upper, left=True, unitriangular=False, out=None) -> Tensor
 
 Computes the solution of a triangular system of linear equations with a unique solution.
@@ -2006,7 +2360,7 @@ the output has the same batch dimensions.
         equations with a unique solution.
 
 Args:
-    A (Tensor): tensor of shape `(*, n, n)` (or `(*, k, k)` if :attr:`left`\ `= True`)
+    A (Tensor): tensor of shape `(*, n, n)` (or `(*, k, k)` if :attr:`left`\ `= False`)
                 where `*` is zero or more batch dimensions.
     B (Tensor): right-hand side tensor of shape `(*, n, k)`.
 
@@ -2021,7 +2375,7 @@ Keyword args:
 Examples::
 
     >>> A = torch.randn(3, 3).triu_()
-    >>> b = torch.randn(3, 4)
+    >>> B = torch.randn(3, 4)
     >>> X = torch.linalg.solve_triangular(A, B, upper=True)
     >>> torch.allclose(A @ X, B)
     True
@@ -2040,9 +2394,12 @@ Examples::
 
 .. _invertible:
     https://en.wikipedia.org/wiki/Invertible_matrix#The_invertible_matrix_theorem
-""")
+""",
+)
 
-lu_factor = _add_docstr(_linalg.linalg_lu_factor, r"""
+lu_factor = _add_docstr(
+    _linalg.linalg_lu_factor,
+    r"""
 linalg.lu_factor(A, *, bool pivot=True, out=None) -> (Tensor, Tensor)
 
 Computes a compact representation of the LU factorization with partial pivoting of a matrix.
@@ -2065,15 +2422,17 @@ Supports inputs of float, double, cfloat and cdouble dtypes.
 Also supports batches of matrices, and if the inputs are batches of matrices then
 the output has the same batch dimensions.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note_has_ex"].format("torch.linalg.lu_factor_ex")}
-""" + r"""
+"""
+    + r"""
 .. warning:: The LU decomposition is almost never unique, as often there are different permutation
              matrices that can yield different LU decompositions.
              As such, different platforms, like SciPy, or inputs on different devices,
              may produce different valid decompositions.
 
-.. warning:: Gradient computations are only supported if the input matrix is full-rank.
+             Gradient computations are only supported if the input matrix is full-rank.
              If this condition is not met, no error will be thrown, but the gradient may not be finite.
              This is because the LU decomposition with pivoting is not differentiable at these points.
 
@@ -2082,8 +2441,11 @@ the output has the same batch dimensions.
         :func:`torch.linalg.lu_solve` solves a system of linear equations given the output of this
         function provided the input matrix was square and invertible.
 
+        :func:`torch.lu_unpack` unpacks the tensors returned by :func:`~lu_factor` into the three
+        matrices `P, L, U` that form the decomposition.
+
         :func:`torch.linalg.lu` computes the LU decomposition with partial pivoting of a possibly
-        non-square matrix.
+        non-square matrix. It is a composition of :func:`~lu_factor` and :func:`torch.lu_unpack`.
 
         :func:`torch.linalg.solve` solves a system of linear equations. It is a composition
         of :func:`~lu_factor` and :func:`~lu_solve`.
@@ -2108,9 +2470,9 @@ Examples::
     >>> A = torch.randn(2, 3, 3)
     >>> B1 = torch.randn(2, 3, 4)
     >>> B2 = torch.randn(2, 3, 7)
-    >>> A_factor = torch.linalg.lu_factor(A)
-    >>> X1 = torch.linalg.lu_solve(A_factor, B1)
-    >>> X2 = torch.linalg.lu_solve(A_factor, B2)
+    >>> LU, pivots = torch.linalg.lu_factor(A)
+    >>> X1 = torch.linalg.lu_solve(LU, pivots, B1)
+    >>> X2 = torch.linalg.lu_solve(LU, pivots, B2)
     >>> torch.allclose(A @ X1, B1)
     True
     >>> torch.allclose(A @ X2, B2)
@@ -2118,19 +2480,24 @@ Examples::
 
 .. _invertible:
     https://en.wikipedia.org/wiki/Invertible_matrix#The_invertible_matrix_theorem
-""")
+""",
+)
 
-lu_factor_ex = _add_docstr(_linalg.linalg_lu_factor_ex, r"""
+lu_factor_ex = _add_docstr(
+    _linalg.linalg_lu_factor_ex,
+    r"""
 linalg.lu_factor_ex(A, *, pivot=True, check_errors=False, out=None) -> (Tensor, Tensor, Tensor)
 
 This is a version of :func:`~lu_factor` that does not perform error checks unless :attr:`check_errors`\ `= True`.
 It also returns the :attr:`info` tensor returned by `LAPACK's getrf`_.
 
-""" + fr"""
+"""
+    + rf"""
 .. note:: {common_notes["sync_note_ex"]}
 
 .. warning:: {common_notes["experimental_warning"]}
-""" + r"""
+"""
+    + r"""
 
 Args:
     A (Tensor): tensor of shape `(*, m, n)` where `*` is zero or more batch dimensions.
@@ -2147,9 +2514,178 @@ Returns:
 
 .. _LAPACK's getrf:
     https://www.netlib.org/lapack/explore-html/dd/d9a/group__double_g_ecomputational_ga0019443faea08275ca60a734d0593e60.html
-""")
+""",
+)
 
-tensorinv = _add_docstr(_linalg.linalg_tensorinv, r"""
+lu_solve = _add_docstr(
+    _linalg.linalg_lu_solve,
+    r"""
+linalg.lu_solve(LU, pivots, B, *, left=True, adjoint=False, out=None) -> Tensor
+
+Computes the solution of a square system of linear equations with a unique solution given an LU decomposition.
+
+Letting :math:`\mathbb{K}` be :math:`\mathbb{R}` or :math:`\mathbb{C}`,
+this function computes the solution :math:`X \in \mathbb{K}^{n \times k}` of the **linear system** associated to
+:math:`A \in \mathbb{K}^{n \times n}, B \in \mathbb{K}^{n \times k}`, which is defined as
+
+.. math:: AX = B
+
+where :math:`A` is given factorized as returned by :func:`~lu_factor`.
+
+If :attr:`left`\ `= False`, this function returns the matrix :math:`X \in \mathbb{K}^{n \times k}` that solves the system
+
+.. math::
+
+    XA = B\mathrlap{\qquad A \in \mathbb{K}^{k \times k}, B \in \mathbb{K}^{n \times k}.}
+
+If  :attr:`adjoint`\ `= True` (and :attr:`left`\ `= True`), given an LU factorization of :math:`A`
+this function function returns the :math:`X \in \mathbb{K}^{n \times k}` that solves the system
+
+.. math::
+
+    A^{\text{H}}X = B\mathrlap{\qquad A \in \mathbb{K}^{k \times k}, B \in \mathbb{K}^{n \times k}.}
+
+where :math:`A^{\text{H}}` is the conjugate transpose when :math:`A` is complex, and the
+transpose when :math:`A` is real-valued. The :attr:`left`\ `= False` case is analogous.
+
+Supports inputs of float, double, cfloat and cdouble dtypes.
+Also supports batches of matrices, and if the inputs are batches of matrices then
+the output has the same batch dimensions.
+
+Args:
+    LU (Tensor): tensor of shape `(*, n, n)` (or `(*, k, k)` if :attr:`left`\ `= True`)
+                 where `*` is zero or more batch dimensions as returned by :func:`~lu_factor`.
+    pivots (Tensor): tensor of shape `(*, n)` (or `(*, k)` if :attr:`left`\ `= True`)
+                     where `*` is zero or more batch dimensions as returned by :func:`~lu_factor`.
+    B (Tensor): right-hand side tensor of shape `(*, n, k)`.
+
+Keyword args:
+    left (bool, optional): whether to solve the system :math:`AX=B` or :math:`XA = B`. Default: `True`.
+    adjoint (bool, optional): whether to solve the system :math:`AX=B` or :math:`A^{\text{H}}X = B`. Default: `False`.
+    out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
+
+Examples::
+
+    >>> A = torch.randn(3, 3)
+    >>> LU, pivots = torch.linalg.lu_factor(A)
+    >>> B = torch.randn(3, 2)
+    >>> X = torch.linalg.lu_solve(LU, pivots, B)
+    >>> torch.allclose(A @ X, B)
+    True
+
+    >>> B = torch.randn(3, 3, 2)   # Broadcasting rules apply: A is broadcasted
+    >>> X = torch.linalg.lu_solve(LU, pivots, B)
+    >>> torch.allclose(A @ X, B)
+    True
+
+    >>> B = torch.randn(3, 5, 3)
+    >>> X = torch.linalg.lu_solve(LU, pivots, B, left=False)
+    >>> torch.allclose(X @ A, B)
+    True
+
+    >>> B = torch.randn(3, 3, 4)   # Now solve for A^T
+    >>> X = torch.linalg.lu_solve(LU, pivots, B, adjoint=True)
+    >>> torch.allclose(A.mT @ X, B)
+    True
+
+.. _invertible:
+    https://en.wikipedia.org/wiki/Invertible_matrix#The_invertible_matrix_theorem
+""",
+)
+
+lu = _add_docstr(
+    _linalg.linalg_lu,
+    r"""
+lu(A, *, pivot=True, out=None) -> (Tensor, Tensor, Tensor)
+
+Computes the LU decomposition with partial pivoting of a matrix.
+
+Letting :math:`\mathbb{K}` be :math:`\mathbb{R}` or :math:`\mathbb{C}`,
+the **LU decomposition with partial pivoting** of a matrix
+:math:`A \in \mathbb{K}^{m \times n}` is defined as
+
+.. math::
+
+    A = PLU\mathrlap{\qquad P \in \mathbb{K}^{m \times m}, L \in \mathbb{K}^{m \times k}, U \in \mathbb{K}^{k \times n}}
+
+where `k = min(m,n)`, :math:`P` is a `permutation matrix`_, :math:`L` is lower triangular with ones on the diagonal
+and :math:`U` is upper triangular.
+
+If :attr:`pivot`\ `= False` and :attr:`A` is on GPU, then the **LU decomposition without pivoting** is computed
+
+.. math::
+
+    A = LU\mathrlap{\qquad L \in \mathbb{K}^{m \times k}, U \in \mathbb{K}^{k \times n}}
+
+When :attr:`pivot`\ `= False`, the returned matrix :attr:`P` will be empty.
+The LU decomposition without pivoting `may not exist`_ if any of the principal minors of :attr:`A` is singular.
+In this case, the output matrix may contain `inf` or `NaN`.
+
+Supports input of float, double, cfloat and cdouble dtypes.
+Also supports batches of matrices, and if :attr:`A` is a batch of matrices then
+the output has the same batch dimensions.
+
+.. seealso::
+
+        :func:`torch.linalg.solve` solves a system of linear equations using the LU decomposition
+        with partial pivoting.
+
+.. warning:: The LU decomposition is almost never unique, as often there are different permutation
+             matrices that can yield different LU decompositions.
+             As such, different platforms, like SciPy, or inputs on different devices,
+             may produce different valid decompositions.
+
+.. warning:: Gradient computations are only supported if the input matrix is full-rank.
+             If this condition is not met, no error will be thrown, but the gradient
+             may not be finite.
+             This is because the LU decomposition with pivoting is not differentiable at these points.
+
+Args:
+    A (Tensor): tensor of shape `(*, m, n)` where `*` is zero or more batch dimensions.
+    pivot (bool, optional): Controls whether to compute the LU decomposition with partial pivoting or
+        no pivoting. Default: `True`.
+
+Keyword args:
+    out (tuple, optional): output tuple of three tensors. Ignored if `None`. Default: `None`.
+
+Returns:
+    A named tuple `(P, L, U)`.
+
+Examples::
+
+    >>> A = torch.randn(3, 2)
+    >>> P, L, U = torch.linalg.lu(A)
+    >>> P
+    tensor([[0., 1., 0.],
+            [0., 0., 1.],
+            [1., 0., 0.]])
+    >>> L
+    tensor([[1.0000, 0.0000],
+            [0.5007, 1.0000],
+            [0.0633, 0.9755]])
+    >>> U
+    tensor([[0.3771, 0.0489],
+            [0.0000, 0.9644]])
+    >>> torch.dist(A, P @ L @ U)
+    tensor(5.9605e-08)
+
+    >>> A = torch.randn(2, 5, 7, device="cuda")
+    >>> P, L, U = torch.linalg.lu(A, pivot=False)
+    >>> P
+    tensor([], device='cuda:0')
+    >>> torch.dist(A, L @ U)
+    tensor(1.0376e-06, device='cuda:0')
+
+.. _permutation matrix:
+    https://en.wikipedia.org/wiki/Permutation_matrix
+.. _may not exist:
+    https://en.wikipedia.org/wiki/LU_decomposition#Definitions
+""",
+)
+
+tensorinv = _add_docstr(
+    _linalg.linalg_tensorinv,
+    r"""
 linalg.tensorinv(A, ind=2, *, out=None) -> Tensor
 
 Computes the multiplicative inverse of :func:`torch.tensordot`.
@@ -2176,7 +2712,7 @@ Supports input of float, double, cfloat and cdouble dtypes.
 
         linalg.tensorsolve(A, B) == torch.tensordot(linalg.tensorinv(A), B)  # When B is a tensor with shape A.shape[:B.ndim]
 
-    It is always prefered to use :func:`~tensorsolve` when possible, as it is faster and more
+    It is always preferred to use :func:`~tensorsolve` when possible, as it is faster and more
     numerically stable than computing the pseudoinverse explicitly.
 
 .. seealso::
@@ -2209,12 +2745,15 @@ Examples::
 
     >>> A = torch.randn(4, 4)
     >>> Atensorinv = torch.linalg.tensorinv(A, ind=1)
-    >>> Ainv = torch.linalg.inverse(A)
+    >>> Ainv = torch.linalg.inv(A)
     >>> torch.allclose(Atensorinv, Ainv)
     True
-""")
+""",
+)
 
-tensorsolve = _add_docstr(_linalg.linalg_tensorsolve, r"""
+tensorsolve = _add_docstr(
+    _linalg.linalg_tensorsolve,
+    r"""
 linalg.tensorsolve(A, B, dims=None, *, out=None) -> Tensor
 
 Computes the solution `X` to the system `torch.tensordot(A, X) = B`.
@@ -2275,9 +2814,12 @@ Examples::
     torch.Size([6, 4])
     >>> torch.allclose(torch.tensordot(A, X, dims=X.ndim), B, atol=1e-6)
     True
-""")
+""",
+)
 
-qr = _add_docstr(_linalg.linalg_qr, r"""
+qr = _add_docstr(
+    _linalg.linalg_qr,
+    r"""
 qr(A, mode='reduced', *, out=None) -> (Tensor, Tensor)
 
 Computes the QR decomposition of a matrix.
@@ -2290,7 +2832,8 @@ the **full QR decomposition** of a matrix
 
     A = QR\mathrlap{\qquad Q \in \mathbb{K}^{m \times m}, R \in \mathbb{K}^{m \times n}}
 
-where :math:`Q` is orthogonal in the real case and unitary in the complex case, and :math:`R` is upper triangular.
+where :math:`Q` is orthogonal in the real case and unitary in the complex case,
+and :math:`R` is upper triangular with real diagonal (even in the complex case).
 
 When `m > n` (tall matrix), as `R` is upper triangular, its last `m - n` rows are zero.
 In this case, we can drop the last `m - n` columns of `Q` to form the
@@ -2310,30 +2853,27 @@ The parameter :attr:`mode` chooses between the full and reduced QR decomposition
 If :attr:`A` has shape `(*, m, n)`, denoting `k = min(m, n)`
 
 - :attr:`mode`\ `= 'reduced'` (default): Returns `(Q, R)` of shapes `(*, m, k)`, `(*, k, n)` respectively.
+  It is always differentiable.
 - :attr:`mode`\ `= 'complete'`: Returns `(Q, R)` of shapes `(*, m, m)`, `(*, m, n)` respectively.
+  It is differentiable for `m <= n`.
 - :attr:`mode`\ `= 'r'`: Computes only the reduced `R`. Returns `(Q, R)` with `Q` empty and `R` of shape `(*, k, n)`.
+  It is never differentiable.
 
 Differences with `numpy.linalg.qr`:
 
 - :attr:`mode`\ `= 'raw'` is not implemented.
 - Unlike `numpy.linalg.qr`, this function always returns a tuple of two tensors.
   When :attr:`mode`\ `= 'r'`, the `Q` tensor is an empty tensor.
-  This behavior may change in a future PyTorch release.
 
-.. note:: The elements in the diagonal of `R` are not necessarily positive.
+.. warning:: The elements in the diagonal of `R` are not necessarily positive.
+             As such, the returned QR decomposition is only unique up to the sign of the diagonal of `R`.
+             Therefore, different platforms, like NumPy, or inputs on different devices,
+             may produce different valid decompositions.
 
-.. note:: :attr:`mode`\ `= 'r'` does not support backpropagation. Use :attr:`mode`\ `= 'reduced'` instead.
-
-.. warning:: The QR decomposition is only unique up to the sign of the diagonal of `R` when the
-             first `k = min(m, n)` columns of :attr:`A` are linearly independent.
-             If this is not the case, different platforms, like NumPy,
-             or inputs on different devices, may produce different valid decompositions.
-
-.. warning:: Gradient computations are only supported if the first `k = min(m, n)` columns
+.. warning:: The QR decomposition is only well-defined if the first `k = min(m, n)` columns
              of every matrix in :attr:`A` are linearly independent.
-             If this condition is not met, no error will be thrown, but the gradient produced
-             will be incorrect.
-             This is because the QR decomposition is not differentiable at these points.
+             If this condition is not met, no error will be thrown, but the QR produced
+             may be incorrect and its autodiff may fail or produce incorrect results.
 
 Args:
     A (Tensor): tensor of shape `(*, m, n)` where `*` is zero or more batch dimensions.
@@ -2377,4 +2917,97 @@ Examples::
     tensor(1.6099e-06)
     >>> torch.dist(Q.mT @ Q, torch.eye(4))
     tensor(6.2158e-07)
-""")
+""",
+)
+
+vander = _add_docstr(
+    _linalg.linalg_vander,
+    r"""
+vander(x, N=None) -> Tensor
+
+Generates a Vandermonde matrix.
+
+Returns the Vandermonde matrix :math:`V`
+
+.. math::
+
+    V = \begin{pmatrix}
+            1 & x_1 & x_1^2 & \dots & x_1^{N-1}\\
+            1 & x_2 & x_2^2 & \dots & x_2^{N-1}\\
+            1 & x_3 & x_3^2 & \dots & x_3^{N-1}\\
+            \vdots & \vdots & \vdots & \ddots &\vdots \\
+            1 & x_n & x_n^2 & \dots & x_n^{N-1}
+        \end{pmatrix}.
+
+for `N > 1`.
+If :attr:`N`\ `= None`, then `N = x.size(-1)` so that the output is a square matrix.
+
+Supports inputs of float, double, cfloat, cdouble, and integral dtypes.
+Also supports batches of vectors, and if :attr:`x` is a batch of vectors then
+the output has the same batch dimensions.
+
+Differences with `numpy.vander`:
+
+- Unlike `numpy.vander`, this function returns the powers of :attr:`x` in ascending order.
+  To get them in the reverse order call ``linalg.vander(x, N).flip(-1)``.
+
+Args:
+    x (Tensor): tensor of shape `(*, n)` where `*` is zero or more batch dimensions
+                consisting of vectors.
+
+Keyword args:
+    N (int, optional): Number of columns in the output. Default: `x.size(-1)`
+
+Example::
+
+    >>> x = torch.tensor([1, 2, 3, 5])
+    >>> linalg.vander(x)
+    tensor([[  1,   1,   1,   1],
+            [  1,   2,   4,   8],
+            [  1,   3,   9,  27],
+            [  1,   5,  25, 125]])
+    >>> linalg.vander(x, N=3)
+    tensor([[ 1,  1,  1],
+            [ 1,  2,  4],
+            [ 1,  3,  9],
+            [ 1,  5, 25]])
+""",
+)
+
+vecdot = _add_docstr(
+    _linalg.linalg_vecdot,
+    r"""
+linalg.vecdot(x, y, *, dim=-1, out=None) -> Tensor
+
+Computes the dot product of two batches of vectors along a dimension.
+
+In symbols, this function computes
+
+.. math::
+
+    \sum_{i=1}^n \overline{x_i}y_i.
+
+over the dimension :attr:`dim` where :math:`\overline{x_i}` denotes the conjugate for complex
+vectors, and it is the identity for real vectors.
+
+Supports input of half, bfloat16, float, double, cfloat, cdouble and integral dtypes.
+It also supports broadcasting.
+
+Args:
+    x (Tensor): first batch of vectors of shape `(*, n)`.
+    y (Tensor): second batch of vectors of shape `(*, n)`.
+
+Keyword args:
+    dim (int): Dimension along which to compute the dot product. Default: `-1`.
+    out (Tensor, optional): output tensor. Ignored if `None`. Default: `None`.
+
+Examples::
+
+    >>> v1 = torch.randn(3, 2)
+    >>> v2 = torch.randn(3, 2)
+    >>> linalg.vecdot(v1, v2)
+    tensor([ 0.3223,  0.2815, -0.1944])
+    >>> torch.vdot(v1[0], v2[0])
+    tensor(0.3223)
+""",
+)

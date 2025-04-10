@@ -7,10 +7,7 @@
 
 #include <torch/csrc/jit/mobile/nnc/registry.h>
 
-namespace torch {
-namespace jit {
-namespace mobile {
-namespace nnc {
+namespace torch::jit::mobile::nnc {
 
 constexpr int64_t kProducedNNCFileFormatVersion = 0x1L;
 
@@ -45,7 +42,7 @@ bool InputSpec::validate(const at::Tensor& input) const {
     return false;
   }
   auto spec_sizes = sizes_;
-  for (int i = 0; i < spec_sizes.size(); i++) {
+  for (const auto i : c10::irange(spec_sizes.size())) {
     // InputSpec size 0 means that the dimension is dynamic
     if (spec_sizes[i] != 0 && spec_sizes[i] != input.sizes()[i]) {
       return false;
@@ -169,6 +166,7 @@ c10::IValue Function::serialize() const {
 
   // input_specs_
   std::vector<c10::IValue> input_specs;
+  input_specs.reserve(input_specs_.size());
   for (const auto& input_spec : input_specs_) {
     input_specs.emplace_back(input_spec.serialize());
   }
@@ -176,6 +174,7 @@ c10::IValue Function::serialize() const {
 
   // output_specs_
   std::vector<c10::IValue> output_specs;
+  output_specs.reserve(output_specs_.size());
   for (const auto& output_spec : output_specs_) {
     output_specs.emplace_back(output_spec.serialize());
   }
@@ -186,6 +185,7 @@ c10::IValue Function::serialize() const {
 
   // sym_shape_positions_
   std::vector<c10::IValue> sym_shape_pos_vec;
+  sym_shape_pos_vec.reserve(sym_shape_positions_.size());
   for (const auto& sym_shape_pos : sym_shape_positions_) {
     sym_shape_pos_vec.emplace_back(
         Tup({sym_shape_pos.input_idx_, sym_shape_pos.dim_idx_}));
@@ -196,7 +196,7 @@ c10::IValue Function::serialize() const {
 }
 
 void Function::init_execution_state() const {
-  if (execution_state_.get() != nullptr) {
+  if (execution_state_ != nullptr) {
     return;
   }
 
@@ -264,8 +264,7 @@ c10::impl::GenericList Function::run(
     const c10::IValue& input = inputs[i];
     const auto& spec = input_specs_[i];
     const auto& input_tensor = input.toTensor();
-    TORCH_CHECK(
-        input_specs_[i].validate(input_tensor), "Invalid input at pos: ", i);
+    TORCH_CHECK(spec.validate(input_tensor), "Invalid input at pos: ", i);
     args[i] = input_tensor.data_ptr();
   }
   offset += inputs.size();
@@ -340,7 +339,4 @@ Function* CompilationUnit::find_function(const c10::QualifiedName& name) const {
   return it->second.get();
 }
 
-} // namespace nnc
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::mobile::nnc

@@ -1,9 +1,17 @@
+# mypy: allow-untyped-defs
 import re
-from typing import Callable, Dict, Set, Optional, Union
+from typing import Callable, Optional, Union
 
 import torch.fx
 from torch.fx.node import map_arg
 from torch.fx.passes.split_module import split_module
+
+
+__all__ = [
+    "FoldedGraphModule",
+    "get_unique_attr_name_in_module",
+    "split_const_subgraphs",
+]
 
 
 class FoldedGraphModule(torch.fx.GraphModule):
@@ -21,13 +29,9 @@ class FoldedGraphModule(torch.fx.GraphModule):
         root: torch.nn.Module,
         graph: torch.fx.Graph,
         const_subgraph: Optional[torch.fx.Graph] = None,
-        fx_const_folded_attrs_name: str = None,
+        fx_const_folded_attrs_name: Optional[str] = None,
+        device_for_folded_attrs: str = "cuda",
     ):
-        # In init, we set graph's owning module to root which will make graph's
-        # owning module be None because graph already have a owning module. We
-        # need owning module to run DCE. To work around we set the number of
-        # graph's owners to 0.
-        graph._owners = 0
         super().__init__(root, graph)
         self.const_subgraph_module = (
             None
@@ -36,6 +40,7 @@ class FoldedGraphModule(torch.fx.GraphModule):
         )
         self.has_folding_been_run = False
         self.fx_const_folded_attrs_name = fx_const_folded_attrs_name
+        self.device_for_folded_attrs = device_for_folded_attrs
 
     def __call__(self, *args, **kwargs):
         if not self.has_folding_been_run:
@@ -58,10 +63,19 @@ class FoldedGraphModule(torch.fx.GraphModule):
         # subgraphs output a single Tensor while multiple outputs are returned as
         # Tuple[Tensor,].
         folded_attrs = self.const_subgraph_module()
+
+        def _create_param(i):
+            return torch.nn.Parameter(
+                i.detach().clone()
+                if not isinstance(i, int)
+                else torch.Tensor([i]).to(device=self.device_for_folded_attrs),
+                requires_grad=i.requires_grad if isinstance(i, torch.Tensor) else False,
+            )
+
         params = (
-            torch.nn.ParameterList([torch.nn.Parameter(i) for i in folded_attrs])
+            torch.nn.ParameterList([_create_param(i) for i in folded_attrs])
             if isinstance(folded_attrs, tuple)
-            else torch.nn.Parameter(folded_attrs)
+            else _create_param(folded_attrs)
         )
         setattr(self, self.fx_const_folded_attrs_name, params)
 
@@ -84,7 +98,9 @@ def _inline_module(gm: torch.fx.GraphModule, inline_mod_name: str):
     # Now actually do the swap. Note that we have to keep track of new nodes that are
     # copied into `gm` -- we do this via replacement_mapping.
     call_mod_args = call_mod_node_to_replace.args
-    replacement_mapping: Dict[torch.fx.Node, torch.fx.Node] = {}
+    call_mod_kwargs = call_mod_node_to_replace.kwargs
+
+    replacement_mapping: dict[torch.fx.Node, torch.fx.Node] = {}
     ph_count = 0
 
     def replacement_fn(node):
@@ -94,7 +110,12 @@ def _inline_module(gm: torch.fx.GraphModule, inline_mod_name: str):
 
     for inline_node in inline_mod.graph.nodes:
         if inline_node.op == "placeholder":
-            replacement_mapping[inline_node] = call_mod_args[ph_count]
+            replacement_mapping[inline_node] = (
+                call_mod_kwargs[inline_node.name]
+                if inline_node.name in call_mod_kwargs
+                else call_mod_args[ph_count]
+            )
+
             ph_count += 1
             continue
 
@@ -133,7 +154,8 @@ def get_unique_attr_name_in_module(mod_traced: torch.fx.GraphModule, name: str) 
 
 def split_const_subgraphs(
     module: Union[torch.nn.Module, torch.fx.GraphModule],
-    skip_folding_node_fn: Optional[Callable[[torch.fx.Node], bool]] = None
+    skip_folding_node_fn: Optional[Callable[[torch.fx.Node], bool]] = None,
+    device_for_folded_attrs: str = "cpu",
 ) -> FoldedGraphModule:
     """
     Looks through `module` for any nodes that have all constant attribute inputs
@@ -149,7 +171,7 @@ def split_const_subgraphs(
 
     # Build up a list of const_nodes, defined as nodes that are themselves
     # get_attrs, or have all get_attr or other constant node inputs.
-    const_nodes: Set[torch.fx.Node] = set()
+    const_nodes: set[torch.fx.Node] = set()
     found_const_folding = False
     for node in mod_traced.graph.nodes:
         # Skip over placeholders/outputs because they can't be const folded and
@@ -159,11 +181,17 @@ def split_const_subgraphs(
 
         # If the node itself is constant, or all of its inputs are constant,
         # then tag it as constant.
-        if node.op != "get_attr" and not set(node.all_input_nodes).issubset(const_nodes):
+        if node.op != "get_attr" and not set(node.all_input_nodes).issubset(
+            const_nodes
+        ):
             continue
 
         # If provided skip folding function says to skip, then skip.
         if skip_folding_node_fn and skip_folding_node_fn(node):
+            continue
+
+        # Skip folding side-effectful functions
+        if node.is_impure():
             continue
 
         # Must be a constant foldable node at this point.
@@ -182,13 +210,14 @@ def split_const_subgraphs(
 
     split = split_module(mod_traced, module, mod_partition)
 
-    const_gm, non_const_gm = split.submod_0, split.submod_1
     const_mod_name, non_const_mod_name = "submod_0", "submod_1"
+    # Safely get submod_1 in case there are no non-const nodes
+    const_gm, non_const_gm = split.submod_0, getattr(split, non_const_mod_name, None)
 
     # The module that a call_module node refers to gets copied to submodules during split.
     # The path to the module also gets inlined, i.e. mod.a.b -> mod_a_b. Here we need to
     # attach inlined modules to `split` as it's the owning module now.
-    for node in non_const_gm.graph.nodes:
+    for node in non_const_gm.graph.nodes if non_const_gm else []:
         if node.op == "call_module":
             setattr(split, node.target, getattr(non_const_gm, node.target))
     for node in const_gm.graph.nodes:
@@ -214,22 +243,29 @@ def split_const_subgraphs(
     # because we are fetching attributes directly from the root module, instead of
     # fetching them from const_gm. Example: The const_gm must have some format like:
     # graph():
-    #    %inp : [#users=1] = placeholder[target=const_inp]
-    #    %add : [#users=1] = call_function[target=operator.add](args = (%inp, %inp), kwargs = {})
+    #    %inp : [num_users=1] = placeholder[target=const_inp]
+    #    %add : [num_users=1] = call_function[target=operator.add](args = (%inp, %inp), kwargs = {})
     #    return add
     # We replace that with the following, which does not have any placeholders:
     # graph():
-    #    %inp_1 : [#users=1] = get_attr[target=const_inp]
-    #    %add : [#users=1] = call_function[target=operator.add](args = (%inp_1, %inp_1), kwargs = {})
+    #    %inp_1 : [num_users=1] = get_attr[target=const_inp]
+    #    %add : [num_users=1] = call_function[target=operator.add](args = (%inp_1, %inp_1), kwargs = {})
     #    return add
     root_const_gm = torch.fx.GraphModule(split, const_gm.graph)
+
+    # The order of placeholders in the const_gm graph should match the order of
+    # args in the outer module, so we can simply use an index for the
+    # placeholder mapping
+    ph_idx = 0
     for node in root_const_gm.graph.nodes:
         if node.op == "output":
             multiple_outputs = isinstance(node.args[0], tuple)
             continue
         if node.op != "placeholder":
             continue
-        in_node = next(n for n in call_const_gm_args if n.name == node.target)
+        assert ph_idx < len(call_const_gm_args)
+        in_node = call_const_gm_args[ph_idx]
+        ph_idx += 1
         assert in_node.op == "get_attr"
         with root_const_gm.graph.inserting_before(node):
             new_node = root_const_gm.graph.get_attr(in_node.target)
@@ -243,12 +279,12 @@ def split_const_subgraphs(
     # worry about whether this is one or more tensors because the original graph
     # correctly uses getitem to extract individual tensors if there are multiple folded.
     fx_const_folded_attrs_name = get_unique_attr_name_in_module(
-        split, "_FX_CONST_FOLDED_ATTRS"
+        mod_traced, "_FX_CONST_FOLDED_ATTRS"
     )
     setattr(
         split,
         fx_const_folded_attrs_name,
-        torch.nn.ParameterList() if multiple_outputs else torch.nn.Parameter(),
+        torch.nn.ParameterList() if multiple_outputs else torch.nn.Parameter(),  # type: ignore[possibly-undefined]
     )
     for node in split.graph.nodes:
         if node.op == "call_module" and node.target == const_mod_name:
@@ -258,13 +294,18 @@ def split_const_subgraphs(
             node.replace_all_uses_with(folded_attrs)
             break
 
+    # Finally, inline the non-constant submod (if it exists) into the split submod.
+    # This is so that the original caller who may have passed in a graph module will
+    # get back out a graph module whose graph is traced to the same granularity.
+    if hasattr(split, non_const_mod_name):
+        _inline_module(split, non_const_mod_name)
+
     split.graph.eliminate_dead_code()
 
-    # Finally, inline the non-constant submod into the split submod. This is so that the
-    # original caller who may have passed in a graph module will get back out a graph
-    # module whose graph is traced to the same granularity.
-    _inline_module(split, non_const_mod_name)
-
     return FoldedGraphModule(
-        split, split.graph, root_const_gm.graph, fx_const_folded_attrs_name
+        split,
+        split.graph,
+        root_const_gm.graph,
+        fx_const_folded_attrs_name,
+        device_for_folded_attrs,
     )

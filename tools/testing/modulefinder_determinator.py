@@ -1,11 +1,14 @@
-import os
-import modulefinder
-import sys
-import pathlib
-import warnings
-from typing import Dict, Any, List, Set
+from __future__ import annotations
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+import modulefinder
+import os
+import sys
+import warnings
+from pathlib import Path
+from typing import Any
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # These tests are slow enough that it's worth calculating whether the patch
 # touched any related files first. This list was manually generated, but for every
@@ -20,6 +23,9 @@ TARGET_DET_LIST = [
     "test_cpp_extensions_aot_ninja",
     "test_cpp_extensions_aot_no_ninja",
     "test_cpp_extensions_jit",
+    "test_cpp_extensions_open_device_registration",
+    "test_cpp_extensions_stream_and_event",
+    "test_cpp_extensions_mtia_backend",
     "test_cuda",
     "test_cuda_primary_ctx",
     "test_dataloader",
@@ -48,11 +54,11 @@ TARGET_DET_LIST = [
 ]
 
 
-_DEP_MODULES_CACHE: Dict[str, Set[str]] = {}
+_DEP_MODULES_CACHE: dict[str, set[str]] = {}
 
 
 def should_run_test(
-    target_det_list: List[str], test: str, touched_files: List[str], options: Any
+    target_det_list: list[str], test: str, touched_files: list[str], options: Any
 ) -> bool:
     test = parse_test_module(test)
     # Some tests are faster to execute than to determine.
@@ -112,7 +118,7 @@ def test_impact_of_file(filename: str) -> str:
         CI - CI configuration files
     """
     parts = filename.split(os.sep)
-    if parts[0] in [".jenkins", ".circleci"]:
+    if parts[0] in [".jenkins", ".circleci", ".ci"]:
         return "CI"
     if parts[0] in ["docs", "scripts", "CODEOWNERS", "README.md"]:
         return "NONE"
@@ -132,15 +138,11 @@ def test_impact_of_file(filename: str) -> str:
 def log_test_reason(file_type: str, filename: str, test: str, options: Any) -> None:
     if options.verbose:
         print_to_stderr(
-            "Determination found {} file {} -- running {}".format(
-                file_type,
-                filename,
-                test,
-            )
+            f"Determination found {file_type} file {filename} -- running {test}"
         )
 
 
-def get_dep_modules(test: str) -> Set[str]:
+def get_dep_modules(test: str) -> set[str]:
     # Cache results in case of repetition
     if test in _DEP_MODULES_CACHE:
         return _DEP_MODULES_CACHE[test]

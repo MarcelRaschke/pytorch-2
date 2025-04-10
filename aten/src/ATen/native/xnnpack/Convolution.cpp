@@ -2,18 +2,16 @@
 
 #include <vector>
 
-#include <ATen/native/xnnpack/Common.h>
 #include <ATen/native/ConvUtils.h>
 #include <ATen/native/utils/Factory.h>
 #include <ATen/native/utils/ParamUtils.h>
+#include <ATen/native/xnnpack/Common.h>
 #include <ATen/native/xnnpack/Convolution.h>
+#include <ATen/native/xnnpack/Engine.h>
 #include <c10/util/irange.h>
 
-namespace at {
-namespace native {
-namespace xnnpack {
-namespace internal {
-namespace convolution2d {
+namespace at::native::xnnpack {
+namespace internal::convolution2d {
 
 namespace {
 
@@ -27,7 +25,7 @@ namespace {
 // TODO: Decouple and improve error handling and messages.
 bool available(
     const Tensor& weight,
-    const c10::optional<IntArrayRef> bias_sizes_opt,
+    const at::OptionalIntArrayRef bias_sizes_opt,
     const IntArrayRef padding,
     const IntArrayRef stride,
     const IntArrayRef dilation,
@@ -144,7 +142,7 @@ const Tensor reorder_weights_for_transpose_conv(const Tensor& weight_nhwc,
      weight_nhwc.sizes(),
      weight_nhwc.options().dtype(),
      MemoryFormat::ChannelsLast,
-     weight_nhwc.names());
+     weight_nhwc.opt_names());
 
   float* out_ptr = reordered.data_ptr<float>();
   float* in_ptr = weight_nhwc.data_ptr<float>();
@@ -171,7 +169,7 @@ const Tensor reorder_weights_for_transpose_conv(const Tensor& weight_nhwc,
 
 ContextConv2D create(
     const Tensor& weight,
-    const c10::optional<Tensor>& bias,
+    const std::optional<Tensor>& bias,
     const IntArrayRef padding,
     const IntArrayRef output_padding,
     const IntArrayRef stride,
@@ -189,7 +187,7 @@ ContextConv2D create(
   TORCH_CHECK(
       available(
           weight_nhwc,
-          (bias.has_value() && bias->defined()) ? c10::optional<IntArrayRef>(bias->sizes()) : c10::nullopt,
+          (bias.has_value() && bias->defined()) ? at::OptionalIntArrayRef(bias->sizes()) : std::nullopt,
           padding_expanded,
           stride_expanded,
           dilation_expanded,
@@ -203,10 +201,8 @@ ContextConv2D create(
 
 
   xnn_operator_t convolution_op{};
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  xnn_status create_status;
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
-  std::array<int64_t, 4> weight_sizes;
+  xnn_status create_status{};
+  std::array<int64_t, 4> weight_sizes{};
 
   if (transposed) {
     const Tensor weight_reordered = reorder_weights_for_transpose_conv(weight_nhwc, groups);
@@ -236,6 +232,8 @@ ContextConv2D create(
       output_min,                                                     // output_min
       output_max,                                                     // output_max
       0u,                                                             // flags
+      nullptr,                                                        // xnn_caches_t
+      nullptr,                                                        // xnn_weights_cache_t
       &convolution_op);                                               // operator
   } else {
     for (const auto i : c10::irange(4)) {
@@ -264,6 +262,8 @@ ContextConv2D create(
       output_min,                                                     // output_min
       output_max,                                                     // output_max
       0u,                                                             // flags
+      nullptr,                                                        // xnn_caches_t
+      nullptr,                                                        // xnn_weights_cache_t
       &convolution_op);                                               // operator
   }
 
@@ -308,7 +308,7 @@ Tensor run(
         context.groups_),
       padded_input_nhwc.options().dtype(),
       MemoryFormat::ChannelsLast,
-      padded_input_nhwc.names());
+      padded_input_nhwc.opt_names());
   } else {
     output = mobile::empty_with_tail_padding(
       conv_output_size(
@@ -319,11 +319,10 @@ Tensor run(
           context.dilation_),
       padded_input_nhwc.options().dtype(),
       MemoryFormat::ChannelsLast,
-      padded_input_nhwc.names());
+      padded_input_nhwc.opt_names());
   }
 
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  xnn_status setup_status;
+  xnn_status setup_status{};
 
   /*
    * Input Pointer Caching:
@@ -337,26 +336,41 @@ Tensor run(
    */
 
   if (context.transposed_) {
-    setup_status = xnn_setup_deconvolution2d_nhwc_f32(
-      context.op.get(),                                      // operator
+    setup_status = xnn_reshape_deconvolution2d_nhwc_f32(
+      context.op.get(),
       padded_input_nhwc.size(Layout::Activation4D::batch),   // batch_size
       padded_input_nhwc.size(Layout::Activation4D::height),  // input_height
       padded_input_nhwc.size(Layout::Activation4D::width),   // input_width
       context.output_padding_[0],                            // adjustment_height
       context.output_padding_[1],                            // adjustment_width
-      padded_input_nhwc.data_ptr<float>(),                   // input
-      output.data_ptr<float>(),                              // output
+      nullptr,                                               // output_height_out
+      nullptr,                                               // output_width_out
       caffe2::pthreadpool_());                               // threadpool
 
-  } else {
-    setup_status = xnn_setup_convolution2d_nhwc_f32(
+    setup_status = xnn_setup_deconvolution2d_nhwc_f32(
       context.op.get(),                                      // operator
+      padded_input_nhwc.data_ptr<float>(),                   // input
+      output.data_ptr<float>());                             // output
+  } else {
+    size_t workspace_size = SIZE_MAX;
+    size_t workspace_alignment = SIZE_MAX;
+
+    setup_status = xnn_reshape_convolution2d_nhwc_f32(
+      context.op.get(),
       padded_input_nhwc.size(Layout::Activation4D::batch),   // batch_size
       padded_input_nhwc.size(Layout::Activation4D::height),  // input_height
       padded_input_nhwc.size(Layout::Activation4D::width),   // input_width
-      padded_input_nhwc.data_ptr<float>(),                   // input
-      output.data_ptr<float>(),                              // output
+      &workspace_size,                                       // workspace_size
+      &workspace_alignment,                                  // workspace_alignment
+      nullptr,                                               // output_height_out
+      nullptr,                                               // output_width_out
       caffe2::pthreadpool_());
+
+    setup_status = xnn_setup_convolution2d_nhwc_f32(
+      context.op.get(),                                      // operator
+      nullptr,                                               // workspace
+      padded_input_nhwc.data_ptr<float>(),                   // input
+      output.data_ptr<float>());                             // output
   }
 
   TORCH_CHECK(
@@ -378,13 +392,13 @@ Tensor run(
 c10::intrusive_ptr<xnnpack::Conv2dOpContext>
     createConv2dClampPrePackOpContext(
         Tensor weight,
-        c10::optional<Tensor> bias,
+        std::optional<Tensor> bias,
         std::vector<int64_t> stride,
         std::vector<int64_t> padding,
         std::vector<int64_t> dilation,
         int64_t groups,
-        const c10::optional<Scalar>& output_min,
-        const c10::optional<Scalar>& output_max) {
+        const std::optional<Scalar>& output_min,
+        const std::optional<Scalar>& output_max) {
       return xnnpack::XNNPackConv2dOpContext::create_context(
           std::move(weight),
           std::move(bias),
@@ -399,14 +413,14 @@ c10::intrusive_ptr<xnnpack::Conv2dOpContext>
 c10::intrusive_ptr<xnnpack::TransposeConv2dOpContext>
     createConv2dTransposeClampPrePackOpContext(
         Tensor weight,
-        c10::optional<Tensor> bias,
+        std::optional<Tensor> bias,
         std::vector<int64_t> stride,
         std::vector<int64_t> padding,
         std::vector<int64_t> output_padding,
         std::vector<int64_t> dilation,
         int64_t groups,
-        const c10::optional<Scalar>& output_min,
-        const c10::optional<Scalar>& output_max) {
+        const std::optional<Scalar>& output_min,
+        const std::optional<Scalar>& output_max) {
       return xnnpack::XNNPackTransposeConv2dOpContext::create_context(
           std::move(weight),
           std::move(bias),
@@ -433,7 +447,7 @@ unpack_prepacked_sizes_conv2d(const IValue& ivalue) {
   const auto& bias = std::get<1>(tuple);
   return IValue(std::make_tuple(
       std::get<0>(tuple).sizes(),
-      (bias && bias->defined()) ? c10::optional<IntArrayRef>(bias->sizes()) : c10::nullopt,
+      (bias && bias->defined()) ? at::OptionalIntArrayRef(bias->sizes()) : std::nullopt,
       std::get<2>(tuple),
       std::get<3>(tuple),
       std::get<4>(tuple),
@@ -446,13 +460,12 @@ Tensor conv2d_transpose_clamp_run(
   return op_context->run(input);
 }
 
-} // namespace convolution2d
 } // namespace internal
 
 bool use_convolution2d(
     const Tensor& input,
     const Tensor& weight,
-    const c10::optional<IntArrayRef> bias_sizes_opt,
+    const at::OptionalIntArrayRef bias_sizes_opt,
     const IntArrayRef padding,
     const IntArrayRef stride,
     const IntArrayRef dilation,
@@ -493,9 +506,6 @@ Tensor convolution2d(
       ContextConv2D::kMax);
 }
 
-} // namespace xnnpack
-
-} // namespace native
-} // namespace at
+} // namespace at::native::xnnpack
 
 #endif /* USE_XNNPACK */

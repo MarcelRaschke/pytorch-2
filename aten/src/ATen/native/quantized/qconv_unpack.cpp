@@ -4,21 +4,33 @@ The correct unpack backend function is determined using runtime polymorphism thr
 which is of type intrusive_ptr<ConvPackedParamsBase<kSpatialDim>> and points to either a PackedConvWeightsQnnp,
 PackedConvWeights (Fbgemm), or PackedConvWeightsCudnn at runtime, which all inherit from ConvPackedParamsBase.
 The implementations for the unpack functions can be found in /cpu/qconv_unpack_impl.cpp, for fbgemm&qnnpack
-and /cudnn/conv_unpack_impl.cpp, for cudnn.
+and /cudnn/ConvUnpackImpl.cpp, for cudnn.
 */
 
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
 #include <tuple>
 
-#include <ATen/ATen.h>
+#include <ATen/core/Tensor.h>
+#include <ATen/core/List.h>
+#include <ATen/core/ivalue.h>
 #include <torch/library.h>
 #include <ATen/native/quantized/cpu/fbgemm_utils.h>
-#include <ATen/native/quantized/cpu/qnnpack_utils.h>
-#include <ATen/native/quantized/cpu/onednn_utils.h>
-#include <ATen/native/quantized/cpu/quant_utils.h>
-#include <ATen/native/quantized/packed_params.h>
+#include <ATen/native/quantized/cpu/QnnpackUtils.h>
+#include <ATen/native/quantized/cpu/OnednnUtils.h>
+#include <ATen/native/quantized/cpu/QuantUtils.h>
+#include <ATen/native/quantized/PackedParams.h>
+#include <ATen/native/quantized/library.h>
 
-namespace at {
-namespace native {
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#else
+#include <ATen/ops/_empty_affine_quantized.h>
+#include <ATen/ops/_empty_per_channel_affine_quantized.h>
+#include <ATen/ops/from_blob.h>
+#endif
+
+
+namespace at::native {
 namespace {
 
 /*
@@ -31,12 +43,13 @@ namespace {
 template <int kSpatialDim = 2>
 class QConvUnpackWeightsInt8 final {
  public:
-  static std::tuple<at::Tensor, c10::optional<at::Tensor>> run(
+  static std::tuple<at::Tensor, std::optional<at::Tensor>> run(
       const c10::intrusive_ptr<ConvPackedParamsBase<kSpatialDim>>& packed_weight) {
     auto& ctx = at::globalContext();
 
 #ifdef USE_FBGEMM
-    if (ctx.qEngine() == at::QEngine::FBGEMM) {
+    if (ctx.qEngine() == at::QEngine::FBGEMM ||
+        ctx.qEngine() == at::QEngine::X86) {
       return packed_weight->unpack();
     }
 #endif
@@ -66,16 +79,17 @@ class QConvUnpackWeightsInt8 final {
 
 class QConv1dUnpackWeightsInt8 final {
  public:
-  static std::tuple<at::Tensor, c10::optional<at::Tensor>> run(
+  static std::tuple<at::Tensor, std::optional<at::Tensor>> run(
       const c10::intrusive_ptr<ConvPackedParamsBase<2>>& packed_weight) {
     auto& ctx = at::globalContext();
     at::Tensor weight;
-    c10::optional<at::Tensor> bias;
+    std::optional<at::Tensor> bias;
 #ifdef USE_FBGEMM
-    if (ctx.qEngine() == at::QEngine::FBGEMM) {
+    if (ctx.qEngine() == at::QEngine::FBGEMM ||
+        ctx.qEngine() == at::QEngine::X86) {
       std::tie(weight, bias) = packed_weight->unpack();
       weight = weight.squeeze_(quant_utils::kConv1dSqueezeDim + 2);
-      return std::tuple<at::Tensor, c10::optional<at::Tensor>>(weight, bias);
+      return std::tuple<at::Tensor, std::optional<at::Tensor>>(weight, bias);
     }
 #endif
 
@@ -84,7 +98,7 @@ class QConv1dUnpackWeightsInt8 final {
       std::tie(weight, bias) = packed_weight->unpack();
       at::Tensor new_weight = weight.clone();
       new_weight = new_weight.squeeze_(quant_utils::kConv1dSqueezeDim + 2);
-      return std::tuple<at::Tensor, c10::optional<at::Tensor>>(new_weight, bias);
+      return std::tuple<at::Tensor, std::optional<at::Tensor>>(new_weight, bias);
     }
 #endif
 
@@ -93,7 +107,7 @@ class QConv1dUnpackWeightsInt8 final {
       std::tie(weight, bias) = packed_weight->unpack();
       at::Tensor new_weight = weight.clone();
       new_weight.squeeze_(quant_utils::kConv1dSqueezeDim + 2);
-      return std::tuple<at::Tensor, c10::optional<at::Tensor>>(new_weight, bias);
+      return std::tuple<at::Tensor, std::optional<at::Tensor>>(new_weight, bias);
     }
 #endif
 
@@ -161,10 +175,8 @@ class QConvTranspose final {
 IValue
 unpack_quantized_prepacked_sizes_conv2d(const IValue& ivalue) {
   auto params = ivalue.toCustomClass<ConvPackedParamsBase<2>>();
-  at::Tensor weight;
-  c10::optional<at::Tensor> bias;
-  std::tie(weight, bias) = params->unpack();
-  c10::optional<IntArrayRef> bias_sizes = c10::nullopt;
+  auto [weight, bias] = params->unpack();
+  at::OptionalIntArrayRef bias_sizes = std::nullopt;
   if (bias && bias->defined()) {
     bias_sizes = bias->sizes();
   }
@@ -178,6 +190,8 @@ unpack_quantized_prepacked_sizes_conv2d(const IValue& ivalue) {
 }
 
 TORCH_LIBRARY_IMPL(quantized, CatchAll, m) {
+  register_conv_params<2>();
+  register_conv_params<3>();
   // conv_unpack is deprecated, please use conv2d_unpack for 2D conv.
   m.impl(TORCH_SELECTIVE_NAME("quantized::conv_unpack"), TORCH_FN(QConvUnpackWeightsInt8<2>::run));
   // We use  conv2d_unpack to be consistent with conv3d_unpack
@@ -220,5 +234,4 @@ TORCH_LIBRARY_IMPL(quantized, CatchAll, m) {
 }
 
 } // namespace
-} // namespace native
-} // namespace at
+} // namespace at::native

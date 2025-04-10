@@ -12,14 +12,11 @@
 #include <torch/csrc/utils/variadic.h>
 
 #include <cstdint>
-#include <iostream>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
 #include <vector>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 struct Node;
 struct Value;
 struct Graph;
@@ -40,6 +37,8 @@ using ::c10::ivalue::ConstantString;
 using torch::autograd::Variable;
 using variable_list = std::vector<Variable>;
 
+TORCH_API std::atomic<bool>& getTracerStateWarnMode();
+
 struct TORCH_API TracingState
     : public std::enable_shared_from_this<TracingState> {
   TracingState();
@@ -48,7 +47,7 @@ struct TORCH_API TracingState
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
   std::shared_ptr<Graph> graph;
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
-  bool warn = true;
+  bool warn = getTracerStateWarnMode();
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
   bool strict = true;
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
@@ -101,10 +100,9 @@ struct TORCH_API TracingState
 // data dependencies, but once they get to the ATen call where we actually have
 // the tracing logic, they get converted into a raw IntArrayRef, and we loose
 // all information. To prevent this, we temporarily stash it in here.
-// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
 struct ArgumentStash {
   struct IntArrayRefTrace : std::vector<Value*> {
-    IntArrayRefTrace(int size) : std::vector<Value*>(size, nullptr) {}
+    IntArrayRefTrace(size_t size) : std::vector<Value*>(size, nullptr) {}
   };
 
   static bool empty() {
@@ -177,7 +175,6 @@ inline void warn(const char* _reason, const char* _kind = nullptr) {
 TORCH_API void setWarn(warn_fn_type fn);
 
 struct TORCH_API NoWarn {
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   NoWarn() : state(getTracingState()) {
     if (state) {
       prev = state->warn;
@@ -190,16 +187,14 @@ struct TORCH_API NoWarn {
     }
   }
   std::shared_ptr<TracingState> state;
-  bool prev;
+  bool prev{false};
 };
 
 struct WithNestedTracingFrame {
-  // NOLINTNEXTLINE(modernize-use-equals-default)
   WithNestedTracingFrame() {
     getTracingState()->enterFrame();
   }
 
-  // NOLINTNEXTLINE(modernize-use-equals-default)
   ~WithNestedTracingFrame() {
     getTracingState()->leaveFrame();
   }
@@ -235,35 +230,49 @@ TORCH_API void abandon();
 // NB: those serve both as an intermediate steps in addInputs below,
 // as well as the overloads that terminate template recursion
 TORCH_API void addInputs(Node* n, const char* name, int64_t value);
+TORCH_API void addInputs(Node* n, const char* name, const c10::SymInt& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    c10::optional<int64_t> value);
+    std::optional<int64_t> value);
 TORCH_API void addInputs(Node* n, const char* name, bool value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<bool>& value);
+    const std::optional<bool>& value);
 TORCH_API void addInputs(Node* n, const char* name, double value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<double>& value);
+    const std::optional<double>& value);
 TORCH_API void addInputs(Node* n, const char* name, const at::Scalar& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::Scalar>& value);
+    const std::optional<at::Scalar>& value);
 TORCH_API void addInputs(Node* n, const char* name, const at::Tensor& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::Tensor>& value);
+    const std::optional<at::Tensor>& value);
 TORCH_API void addInputs(Node* n, const char* name, ArrayRef<int64_t> value);
+TORCH_API void addInputs(Node* n, const char* name, c10::SymIntArrayRef value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<ArrayRef<int64_t>>& value);
+    std::optional<c10::SymInt> value);
+TORCH_API void addInputs(
+    Node* n,
+    const char* name,
+    const std::optional<ArrayRef<int64_t>>& value);
+TORCH_API void addInputs(
+    Node* n,
+    const char* name,
+    const at::OptionalIntArrayRef& opt_value);
+TORCH_API void addInputs(
+    Node* n,
+    const char* name,
+    const at::OptionalSymIntArrayRef& opt_value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
@@ -272,7 +281,17 @@ TORCH_API void addInputs(
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const List<c10::optional<at::Tensor>>& value);
+    const std::vector<at::Tensor>& value,
+    bool allow_undefined = false);
+TORCH_API void addInputs(
+    Node* n,
+    const char* name,
+    at::ITensorListRef value,
+    bool allow_undefined = false);
+TORCH_API void addInputs(
+    Node* n,
+    const char* name,
+    const List<std::optional<at::Tensor>>& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
@@ -282,15 +301,15 @@ TORCH_API void addInputs(Node* n, const char* name, ArrayRef<double> value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<ArrayRef<double>>& value);
+    const std::optional<ArrayRef<double>>& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::string_view value);
+    const std::string_view value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<c10::string_view>& value);
+    const std::optional<std::string_view>& value);
 TORCH_API void addInputs(Node* n, const char* name, at::Device value);
 TORCH_API void addInputs(Node* n, const char* name, c10::Stream stream);
 TORCH_API void addInputs(Node* n, const char* name, at::Layout value);
@@ -298,46 +317,48 @@ TORCH_API void addInputs(Node* n, const char* name, at::ScalarType value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::ScalarType>& value);
+    const std::optional<at::ScalarType>& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::Device>& value);
+    const std::optional<at::Device>& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::Layout>& value);
+    const std::optional<at::Layout>& value);
 TORCH_API void addInputs(Node* n, const char* name, at::MemoryFormat value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    c10::optional<at::DimnameList> value);
+    std::optional<at::DimnameList> value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::MemoryFormat>& value);
+    const std::optional<at::MemoryFormat>& value);
 TORCH_API void addInputs(
     Node* n,
     const char* name,
-    const c10::optional<at::Generator>& value);
+    const std::optional<at::Generator>& value);
 
 inline void addInputs(
     Node* n,
     const char* name,
     const std::vector<bool>& value) {
-  AT_ERROR("Tracing a list of bool type is currently not supported!");
+  TORCH_CHECK(false, "Tracing a list of bool type is currently not supported!");
 }
 
 template <typename T>
 void addInputs(Node* n, const char* name, ArrayRef<T> value) {
-  AT_ERROR("Tracing a list of arbitrary type is currently not supported!");
+  TORCH_CHECK(
+      false, "Tracing a list of arbitrary type is currently not supported!");
 }
 template <typename K, typename V>
 void addInputs(
     Node* n,
     const char* name,
     const std::unordered_map<K, V>& value) {
-  AT_ERROR("Tracing a dict of arbitrary types is currently not supported!");
+  TORCH_CHECK(
+      false, "Tracing a dict of arbitrary types is currently not supported!");
 }
 
 template <size_t N>
@@ -356,19 +377,20 @@ TORCH_API void ensureUniqueIfOutOfPlaced(
     const at::Tensor& tensor);
 TORCH_API void ensureUniqueIfOutOfPlaced(
     const char* name,
-    const c10::optional<at::Tensor>& tensor);
+    const std::optional<at::Tensor>& tensor);
 
 template <
     typename T,
-    typename = torch::enable_if_t<(
-        !std::is_convertible<torch::decay_t<T>, at::TensorList>::value &&
-        !std::is_convertible<torch::decay_t<T>, c10::List<at::Tensor>>::value &&
-        !std::is_convertible<torch::decay_t<T>, at::Tensor>::value &&
-        !std::is_convertible<
-            torch::decay_t<T>,
-            c10::intrusive_ptr<c10::ivalue::Object>>::value)>>
+    typename = std::enable_if_t<
+        (!std::is_convertible_v<std::decay_t<T>, at::TensorList> &&
+         !std::is_convertible_v<std::decay_t<T>, c10::List<at::Tensor>> &&
+         !std::is_convertible_v<std::decay_t<T>, at::Tensor> &&
+         !std::is_convertible_v<
+             std::decay_t<T>,
+             c10::intrusive_ptr<c10::ivalue::Object>>)>>
 void addOutput(Node* node, T&&) {
-  AT_ERROR(
+  TORCH_CHECK(
+      false,
       "Found an unsupported argument type ",
       c10::demangle_type<T>(),
       " in the JIT tracer. File a bug report.");
@@ -385,6 +407,7 @@ TORCH_API autograd::Variable getSizeOf(
     const autograd::Variable& var,
     int64_t dim);
 
+TORCH_API autograd::Variable getNumelOf(const autograd::Variable& var);
+
 } // namespace tracer
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

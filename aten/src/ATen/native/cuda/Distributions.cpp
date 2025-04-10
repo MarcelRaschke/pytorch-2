@@ -16,16 +16,18 @@
 #include <ATen/ops/poisson_native.h>
 #endif
 
-namespace at { namespace native {
+namespace at::native {
 
-Tensor _s_poisson_cuda(const Tensor& lambda, c10::optional<Generator> gen_) {
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+Tensor _s_poisson_cuda(const Tensor& lambda, std::optional<Generator> gen_) {
   auto gen = get_generator_or_default<CUDAGeneratorImpl>(gen_, cuda::detail::getDefaultCUDAGenerator());
   Tensor ret = at::empty(lambda.sizes(), lambda.options());
   launch_poisson_cuda_kernel(ret, lambda, gen);
   return ret;
 }
 
-Tensor _s_binomial_cuda(const Tensor& count, const Tensor& prob, c10::optional<Generator> gen_) {
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+Tensor _s_binomial_cuda(const Tensor& count, const Tensor& prob, std::optional<Generator> gen_) {
   auto gen = get_generator_or_default<CUDAGeneratorImpl>(gen_, cuda::detail::getDefaultCUDAGenerator());
   Tensor ret = at::empty(count.sizes(), count.options());
   at::TensorIterator iter = at::TensorIteratorConfig()
@@ -37,14 +39,16 @@ Tensor _s_binomial_cuda(const Tensor& count, const Tensor& prob, c10::optional<G
   return ret;
 }
 
-Tensor _s_gamma_cuda(const Tensor& alpha, c10::optional<Generator> gen_) {
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+Tensor _s_gamma_cuda(const Tensor& alpha, std::optional<Generator> gen_) {
   auto gen = get_generator_or_default<CUDAGeneratorImpl>(gen_, cuda::detail::getDefaultCUDAGenerator());
   Tensor ret = at::empty(alpha.sizes(), alpha.options());
   launch_gamma_kernel(ret, alpha, gen);
   return ret;
 }
 
-Tensor _s_dirichlet_cuda(const Tensor& alpha, c10::optional<Generator> gen_) {
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+Tensor _s_dirichlet_cuda(const Tensor& alpha, std::optional<Generator> gen_) {
   auto gen = get_generator_or_default<CUDAGeneratorImpl>(gen_, cuda::detail::getDefaultCUDAGenerator());
   Tensor ret = at::empty(alpha.sizes(), alpha.options());
   launch_gamma_kernel(ret, alpha, gen);
@@ -81,4 +85,4 @@ Tensor _dirichlet_grad_cuda(const Tensor& x, const Tensor& alpha, const Tensor& 
   return ret;
 }
 
-}} // namespace at::native
+} // namespace at::native

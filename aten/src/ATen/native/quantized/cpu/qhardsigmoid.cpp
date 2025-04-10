@@ -1,16 +1,22 @@
-#include <ATen/ATen.h>
-#include <ATen/NativeFunctions.h>
-#include <torch/library.h>
-#include <ATen/quantized/Quantizer.h>
-#include <ATen/native/quantized/cpu/quantized_ops.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
+#include <ATen/Context.h>
+#include <ATen/native/quantized/cpu/QuantizedOps.h>
 #include <ATen/native/quantized/cpu/init_qnnpack.h>
-#include <ATen/native/quantized/cpu/qnnpack_utils.h>
+#include <ATen/native/quantized/cpu/QnnpackUtils.h>
 #include <caffe2/utils/threadpool/pthreadpool-cpp.h>
+
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/_empty_affine_quantized.h>
+#include <ATen/ops/hardsigmoid_native.h>
+#endif
 
 #include <algorithm>
 
-namespace at {
-namespace native {
+namespace at::native {
 
 DEFINE_DISPATCH(qhardsigmoid_stub);
 
@@ -102,4 +108,4 @@ Tensor& hardsigmoid_out_quantized_cpu(const Tensor& qx, Tensor& result) {
   return result;
 }
 
-}}  // namespace at::native
+}  // namespace at::native

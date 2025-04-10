@@ -7,9 +7,11 @@ demonstration of these components in action:
 ::
 
     import torch
+
+
     # Simple module for demonstration
     class MyModule(torch.nn.Module):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.param = torch.nn.Parameter(torch.rand(3, 4))
             self.linear = torch.nn.Linear(4, 5)
@@ -17,21 +19,23 @@ demonstration of these components in action:
         def forward(self, x):
             return self.linear(x + self.param).clamp(min=0.0, max=1.0)
 
+
     module = MyModule()
 
     from torch.fx import symbolic_trace
+
     # Symbolic tracing frontend - captures the semantics of the module
-    symbolic_traced : torch.fx.GraphModule = symbolic_trace(module)
+    symbolic_traced: torch.fx.GraphModule = symbolic_trace(module)
 
     # High-level intermediate representation (IR) - Graph representation
     print(symbolic_traced.graph)
     """
     graph():
-        %x : [#users=1] = placeholder[target=x]
-        %param : [#users=1] = get_attr[target=param]
-        %add : [#users=1] = call_function[target=operator.add](args = (%x, %param), kwargs = {})
-        %linear : [#users=1] = call_module[target=linear](args = (%add,), kwargs = {})
-        %clamp : [#users=1] = call_method[target=clamp](args = (%linear,), kwargs = {min: 0.0, max: 1.0})
+        %x : [num_users=1] = placeholder[target=x]
+        %param : [num_users=1] = get_attr[target=param]
+        %add : [num_users=1] = call_function[target=operator.add](args = (%x, %param), kwargs = {})
+        %linear : [num_users=1] = call_module[target=linear](args = (%add,), kwargs = {})
+        %clamp : [num_users=1] = call_method[target=clamp](args = (%linear,), kwargs = {min: 0.0, max: 1.0})
         return clamp
     """
 
@@ -80,10 +84,33 @@ Several example transformations can be found at the
 repository.
 '''
 
-from .graph_module import GraphModule
-from ._symbolic_trace import symbolic_trace, Tracer, wrap, PH, ProxyableClassMeta
-from .graph import Graph, CodeGen
-from .node import Node, map_arg
-from .proxy import Proxy
-from .interpreter import Interpreter as Interpreter, Transformer as Transformer
-from .subgraph_rewriter import replace_pattern
+from torch.fx import immutable_collections
+from torch.fx._symbolic_trace import (  # noqa: F401
+    PH,
+    ProxyableClassMeta,
+    symbolic_trace,
+    Tracer,
+    wrap,
+)
+from torch.fx.graph import CodeGen, Graph  # noqa: F401
+from torch.fx.graph_module import GraphModule
+from torch.fx.interpreter import Interpreter, Transformer
+from torch.fx.node import has_side_effect, map_arg, Node
+from torch.fx.proxy import Proxy
+from torch.fx.subgraph_rewriter import replace_pattern
+
+
+__all__ = [
+    "symbolic_trace",
+    "Tracer",
+    "wrap",
+    "Graph",
+    "GraphModule",
+    "Interpreter",
+    "Transformer",
+    "Node",
+    "Proxy",
+    "replace_pattern",
+    "has_side_effect",
+    "map_arg",
+]

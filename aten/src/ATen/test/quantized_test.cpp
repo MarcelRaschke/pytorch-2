@@ -9,7 +9,7 @@
 #include <sstream>
 #include <type_traits>
 // For quantize_val
-#include <ATen/native/quantized/affine_quantizer.h>
+#include <ATen/native/quantized/AffineQuantizer.h>
 #include <c10/core/ScalarType.h>
 #include <c10/util/irange.h>
 #include <ATen/quantized/Quantizer.h>
@@ -156,7 +156,7 @@ TEST(TestQTensor, QuantizePerChannel4d) {
   int ch_axis = 1;
   // create 4d tensor where each H x W image is a range(0, H*W)
   Tensor tensor = at::empty({1, C, H, W}, at::device(at::kCPU).dtype(kFloat));
-  auto* tensor_data = tensor.data_ptr<float>();
+  auto* tensor_data = tensor.mutable_data_ptr<float>();
   for (int c = 0, i = 0; c < C; ++c) {
     for (int e = 0; e < H * W; ++e, ++i) {
       tensor_data[i] = e;
@@ -214,13 +214,13 @@ TEST(TestQTensor, QuantizePerChannel4dChannelsLast) {
 TEST(TestQTensor, FromBlobQuantizedPerTensor) {
   const float scale = 0.1;
   const int64_t zero_point = 10;
-  std::vector<int64_t> shape = {10, 10};
+  std::vector<int64_t> shape = {5, 10};
   auto numel = c10::multiply_integers(shape);
 
   TensorOptions options(at::kQUInt8);
 
   auto custom_vec = std::make_unique<std::vector<uint8_t>>();
-  custom_vec->reserve(numel);
+  custom_vec->resize(numel);
 
   uint8_t* custom_data = custom_vec->data();
   for (const auto i : c10::irange(numel)) {
@@ -240,6 +240,13 @@ TEST(TestQTensor, FromBlobQuantizedPerTensor) {
   for (const auto i : c10::irange(numel)) {
     ASSERT_EQ((int)custom_data[i], (int)q_data[i]);
   }
+  for (int h = 0, i = 0; h < shape[0]; ++h) {
+    for (int w = 0; w < shape[1]; ++w, ++i) {
+      ASSERT_EQ(
+          qtensor[h][w].item<float>(),
+          (custom_data[i] - zero_point) * scale);
+    }
+  }
   ASSERT_EQ((float)qtensor.q_scale(), (float)scale);
   ASSERT_EQ(qtensor.q_zero_point(), zero_point);
   }
@@ -256,7 +263,7 @@ TEST(TestQTensor, FromBlobQuantizedPerChannel) {
   TensorOptions options(at::kQUInt8);
 
   auto custom_vec = std::make_unique<std::vector<uint8_t>>();
-  custom_vec->reserve(numel);
+  custom_vec->resize(numel);
 
   uint8_t* custom_data = custom_vec->data();
   for (const auto i : c10::irange(numel)) {
@@ -309,7 +316,7 @@ TEST(TestQTensor, TestArmVectorizedQuantizeDequantize) {
           quantize_val_with_datatype(scale, zero_point, x_values[i]).val_);
       }
       const Tensor r = q.dequantize();
-      const float* r_data = r.data_ptr<float>();
+      const float* r_data = r.const_data_ptr<float>();
       for (const auto i : c10::irange(numel)) {
         ASSERT_FLOAT_EQ(
           r_data[i],

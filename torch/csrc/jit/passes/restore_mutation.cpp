@@ -3,8 +3,7 @@
 #include <torch/csrc/jit/passes/remove_mutation.h>
 #include <torch/csrc/jit/passes/restore_mutation.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 FunctionalToInplaceRewriter::FunctionalToInplaceRewriter(
     std::shared_ptr<Graph> graph)
@@ -45,7 +44,7 @@ bool FunctionalToInplaceRewriter::CanBeInplace(Node* node) {
     return false;
   }
 
-  // If x has more than one use, skip the converson.
+  // If x has more than one use, skip the conversion.
   // TODO: Use liveness analysis to catch more general scenario
   return (input->uses().size() == 1);
 }
@@ -81,5 +80,4 @@ bool FunctionalToInplaceActivation(const std::shared_ptr<Graph>& graph) {
   return rewriter.FunctionalToInplace(graph->block());
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

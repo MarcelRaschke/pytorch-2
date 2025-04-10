@@ -2,14 +2,11 @@
 
 #include <ATen/core/jit_type.h>
 #include <c10/util/irange.h>
-#include <torch/csrc/jit/frontend/error_report.h>
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/ir_views.h>
-#include <torch/csrc/jit/passes/dead_code_elimination.h>
 #include <torch/csrc/jit/runtime/graph_iterator.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // WILL states that a node/block must hit the exit, MIGHT that it may happen,
 // WONT that it will not happen. THROWS states that a node/block always throws,
@@ -77,7 +74,7 @@ struct ExitTransformer {
     // this value will never be used, since we will always throw before it is
     // accessed
     throws_val_ = getUnitValue(BoolType::get());
-  };
+  }
 
   void transformReturnStmts() {
     current_exit_kind_ = prim::ReturnStmt;
@@ -126,7 +123,7 @@ struct ExitTransformer {
   }
 
   static void removeOutputs(Block* b) {
-    while (b->outputs().size() > 0) {
+    while (!b->outputs().empty()) {
       b->eraseOutput(0);
     }
   }
@@ -292,8 +289,7 @@ struct ExitTransformer {
       else_pair = ExitPair(else_pair.hasExited(), exit_vals);
     }
 
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Value* has_exited;
+    Value* has_exited = nullptr;
     if (if_status == ExitStatus::WILL) {
       // Need to maintain the invariant that if hasExited() == true_val_
       // then we have exited.
@@ -348,7 +344,7 @@ struct ExitTransformer {
       new_if->addOutput()->setType(block->outputs().at(i)->type());
     }
 
-    while (block->outputs().size() > 0) {
+    while (!block->outputs().empty()) {
       block->eraseOutput(0);
     }
     for (auto out : new_if->outputs()) {
@@ -369,7 +365,7 @@ struct ExitTransformer {
   // never be used, it is safe to replace them with unitialized value
   void destroyNodeAfterExit(Node* n) {
     for (auto output : n->outputs()) {
-      if (output->uses().size() > 0) {
+      if (!output->uses().empty()) {
         output->replaceAllUsesWith(getUnitValue(output->type()));
       }
     }
@@ -523,7 +519,7 @@ struct ExitTransformer {
   std::shared_ptr<Graph> graph_;
 };
 
-bool inlineConsecutiveIfs(Node* node) {
+static bool inlineConsecutiveIfs(Node* node) {
   if (node->kind() != prim::If || node->next()->kind() != prim::If) {
     return false;
   }
@@ -554,10 +550,8 @@ bool inlineConsecutiveIfs(Node* node) {
   bool else_value = maybe_else_value->toBool();
 
   for (const auto i : c10::irange(2)) {
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Block* first_if_block;
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Block* second_if_block;
+    Block* first_if_block = nullptr;
+    Block* second_if_block = nullptr;
 
     if (i == 0) {
       first_if_block = first_if.thenBlock();
@@ -606,7 +600,7 @@ bool inlineConsecutiveIfs(Node* node) {
 //   return 1
 // else:
 //   return 2
-void inlineConsecutiveIfs(Block* block) {
+static void inlineConsecutiveIfs(Block* block) {
   for (auto it = block->nodes().begin(), end = block->nodes().end();
        it != end;) {
     for (Block* b : it->blocks()) {
@@ -846,5 +840,5 @@ void TransformExits(std::shared_ptr<Graph>& graph) {
   inlineConsecutiveIfs(graph->block());
   convertWithBlocksToEnterExitNodes(graph);
 }
-} // namespace jit
-} // namespace torch
+
+} // namespace torch::jit

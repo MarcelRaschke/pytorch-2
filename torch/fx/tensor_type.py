@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 from torch.fx.experimental.unification import Var  # type: ignore[attr-defined]
 
 from ._compatibility import compatibility
@@ -18,7 +19,7 @@ class TensorType:
         self.__args__ = dim
 
     def __repr__(self):
-        return f'TensorType[{self.__args__}]'
+        return f"TensorType[{self.__args__}]"
 
     def __eq__(self, other):
         if isinstance(other, self.__class__):
@@ -28,16 +29,18 @@ class TensorType:
 
     @staticmethod
     def __class_getitem__(*args):
-        assert isinstance(args[0], tuple)
-        return TensorType(args[0])
+        if len(args) == 1 and isinstance(args[0], tuple):
+            args = args[0]
+        return TensorType(tuple(args))
 
 
 class _DynType:
     """
     _DynType defines a type which stands for the absence of type information.
     """
-    def __init__(self):
-        self.__name__ = '_DynType'
+
+    def __init__(self) -> None:
+        self.__name__ = "_DynType"
 
     def __eq__(self, other):
         return isinstance(other, self.__class__)
@@ -51,11 +54,12 @@ class _DynType:
 
 Dyn = _DynType()
 
+
 @compatibility(is_backward_compatible=False)
 def is_consistent(t1, t2):
     """
     A binary relation denoted by ~ that determines if t1 is consistent with t2.
-    The relation is reflexive, semmetric but not transitive.
+    The relation is reflexive, symmetric but not transitive.
     returns True if t1 and t2 are consistent and False otherwise.
     Example:
         Dyn ~ TensorType((1,2,3))
@@ -71,8 +75,10 @@ def is_consistent(t1, t2):
         return True
 
     if isinstance(t1, TensorType) and isinstance(t2, TensorType):
-        return len(t1.__args__) == len(t2.__args__) and \
-            all([is_consistent(elem1, elem2) for elem1, elem2 in zip(t1.__args__, t2.__args__)])
+        return len(t1.__args__) == len(t2.__args__) and all(
+            is_consistent(elem1, elem2)
+            for elem1, elem2 in zip(t1.__args__, t2.__args__)
+        )
     else:
         return False
 
@@ -96,8 +102,10 @@ def is_more_precise(t1, t2):
         return True
 
     if isinstance(t1, TensorType) and isinstance(t2, TensorType):
-        return len(t1.__args__) == len(t2.__args__) and \
-            all([is_more_precise(elem1, elem2) for elem1, elem2 in zip(t1.__args__, t2.__args__)])
+        return len(t1.__args__) == len(t2.__args__) and all(
+            is_more_precise(elem1, elem2)
+            for elem1, elem2 in zip(t1.__args__, t2.__args__)
+        )
 
     else:
         return False

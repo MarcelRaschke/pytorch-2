@@ -18,7 +18,7 @@
 #include <ATen/ops/sum.h>
 #endif
 
-namespace at { namespace native {
+namespace at::native {
 namespace {
 
 void slow_conv2d_shape_check(
@@ -151,10 +151,14 @@ void slow_conv2d_forward(
   resize_output(output, {batchSize, nOutputPlane, outputHeight, outputWidth});
 
   // Create temporary columns
-  auto columns = at::empty({nInputPlane * kW * kH, outputHeight * outputWidth}, input.options());
+  at::Tensor columns;
 
   const bool requires_columns = (
       kW != 1 || kH != 1 || dW != 1 || dH != 1 || padH != 0 || padW != 0);
+
+  if (requires_columns) {
+    columns = at::empty({nInputPlane * kW * kH, outputHeight * outputWidth}, input.options());
+  }
 
   if (bias.defined()) {
     TORCH_CHECK(bias.scalar_type() == input.scalar_type(),
@@ -169,7 +173,7 @@ void slow_conv2d_forward(
                                   "slow_conv2d_cuda", [&] {
     // For each elt in batch, do:
     for (int elt = 0; elt < batchSize; elt ++) {
-      // Matrix mulitply per output:
+      // Matrix multiply per output:
       auto input_n = input.select(0, elt);
       auto output_n = output.select(0, elt);
 
@@ -177,33 +181,33 @@ void slow_conv2d_forward(
         // Extract columns:
         at::native::im2col(
           c10::cuda::getCurrentCUDAStream(),
-          input_n.data_ptr<scalar_t>(),
+          input_n.const_data_ptr<scalar_t>(),
           nInputPlane, inputHeight, inputWidth,
           outputHeight, outputWidth,
           kH, kW, padH, padW, dH, dW,
           1, 1,
-          columns.data_ptr<scalar_t>()
+          columns.mutable_data_ptr<scalar_t>()
         );
       }
 
       // M,N,K are dims of matrix A and B
       // (see http://docs.nvidia.com/cuda/cublas/#cublas-lt-t-gt-gemm)
       int64_t m = nOutputPlane;
-      int64_t n = columns.size(1);
+      int64_t n = outputHeight * outputWidth;
       int64_t k = nInputPlane*kH*kW;
 
       // Do GEMM (note: this is a bit confusing because gemm assumes column-major matrices)
       auto gemm_in_ptr = requires_columns ?
-          columns.data_ptr<scalar_t>() :
-          input_n.data_ptr<scalar_t>();
+          columns.const_data_ptr<scalar_t>() :
+          input_n.const_data_ptr<scalar_t>();
       at::cuda::blas::gemm(
           'n', 'n',
           n, m, k,
           scalar_t(1),
           gemm_in_ptr, n,
-          weight.data_ptr<scalar_t>(), k,
+          weight.const_data_ptr<scalar_t>(), k,
           scalar_t(1),
-          output_n.data_ptr<scalar_t>(), n
+          output_n.mutable_data_ptr<scalar_t>(), n
       );
     }
   });
@@ -251,7 +255,7 @@ void slow_conv2d_backward(
                                   "slow_conv2d_backward_cuda", [&] {
     // For each elt in batch, do:
     for (int elt = 0; elt < batchSize; elt ++) {
-      // Matrix mulitply per sample:
+      // Matrix multiply per sample:
       auto grad_input_n = grad_input.select(0, elt);
       auto grad_output_n = grad_output.select(0, elt);
 
@@ -266,19 +270,19 @@ void slow_conv2d_backward(
           'n', 't',
           n, m, k,
           scalar_t(1),
-          grad_output_n.data_ptr<scalar_t>(), n,
-          weight.data_ptr<scalar_t>(), m,
+          grad_output_n.const_data_ptr<scalar_t>(), n,
+          weight.const_data_ptr<scalar_t>(), m,
           scalar_t(0),
-          grad_columns.data_ptr<scalar_t>(), n
+          grad_columns.mutable_data_ptr<scalar_t>(), n
       );
 
       // Unpack columns back into input:
       using acc_t = at::acc_type<scalar_t, true>;
       at::native::col2im<scalar_t, acc_t>(
         c10::cuda::getCurrentCUDAStream(),
-        grad_columns.data_ptr<scalar_t>(),
+        grad_columns.const_data_ptr<scalar_t>(),
         nInputPlane, inputHeight, inputWidth, outputHeight, outputWidth, kH, kW, padH, padW, dH, dW,
-        1, 1, grad_input_n.data_ptr<scalar_t>()
+        1, 1, grad_input_n.mutable_data_ptr<scalar_t>()
       );
     }
   });
@@ -323,22 +327,22 @@ void slow_conv2d_grad_weight(
                                   "slow_conv2d_grad_weight_cuda", [&] {
     // For each elt in batch, do:
     for (int elt = 0; elt < batchSize; elt ++) {
-      // Matrix mulitply per output:
+      // Matrix multiply per output:
       auto grad_output_n = grad_output.select(0, elt);
 
-      // Matrix mulitply per output:
+      // Matrix multiply per output:
       auto input_n = input.select(0, elt);
 
       if (requires_columns) {
         // Extract columns:
         at::native::im2col<scalar_t>(
           c10::cuda::getCurrentCUDAStream(),
-          input_n.data_ptr<scalar_t>(),
+          input_n.const_data_ptr<scalar_t>(),
           nInputPlane, inputHeight, inputWidth,
           outputHeight, outputWidth,
           kH, kW, padH, padW, dH, dW,
           1, 1,
-          columns.data_ptr<scalar_t>()
+          columns.mutable_data_ptr<scalar_t>()
         );
       }
 
@@ -350,16 +354,16 @@ void slow_conv2d_grad_weight(
 
       // Do GEMM (note: this is a bit confusing because gemm assumes column-major matrices)
       auto gemm_in_ptr = requires_columns ?
-          columns.data_ptr<scalar_t>() :
-          input_n.data_ptr<scalar_t>();
+          columns.const_data_ptr<scalar_t>() :
+          input_n.const_data_ptr<scalar_t>();
       at::cuda::blas::gemm(
           't', 'n',
           n, m, k,
           scalar_t(1),
           gemm_in_ptr, k,
-          grad_output_n.data_ptr<scalar_t>(), k,
+          grad_output_n.const_data_ptr<scalar_t>(), k,
           scalar_t(1),
-          grad_weight.data_ptr<scalar_t>(), n
+          grad_weight.mutable_data_ptr<scalar_t>(), n
       );
     }
   });
@@ -372,7 +376,7 @@ Tensor& slow_conv2d_forward_out_cuda(
     const Tensor &self_,
     const Tensor &weight_,
     IntArrayRef kernel_size,
-    const c10::optional<Tensor> &bias_,
+    const std::optional<Tensor> &bias_,
     IntArrayRef stride,
     IntArrayRef padding,
     Tensor &output) {
@@ -386,7 +390,7 @@ Tensor& slow_conv2d_forward_out_cuda(
     if (bias_.has_value() && bias_->defined()) {
       return bias_->expect_contiguous();
     }
-    return MaybeOwned<Tensor>::owned(c10::in_place);
+    return MaybeOwned<Tensor>::owned(std::in_place);
   }();
 
   slow_conv2d_forward(
@@ -405,7 +409,7 @@ Tensor slow_conv2d_forward_cuda(
     const Tensor &self,
     const Tensor &weight,
     IntArrayRef kernel_size,
-    const c10::optional<Tensor> &bias,
+    const std::optional<Tensor> &bias,
     IntArrayRef stride,
     IntArrayRef padding) {
   auto output = at::empty({0}, self.options());
@@ -495,5 +499,4 @@ std::tuple<Tensor, Tensor, Tensor> slow_conv2d_backward_cuda(
       grad_bias);
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native

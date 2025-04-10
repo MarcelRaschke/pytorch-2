@@ -1,9 +1,12 @@
 #include <torch/csrc/jit/passes/concat_opt.h>
 
 #include <algorithm>
+#include <deque>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
+#include <c10/util/ssize.h>
 #include <torch/csrc/jit/ir/alias_analysis.h>
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/ir/named_value.h>
@@ -13,8 +16,7 @@
 #include <torch/csrc/jit/passes/remove_mutation.h>
 #include <torch/csrc/jit/runtime/graph_iterator.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -296,7 +298,7 @@ class ConcatExpander {
     auto cat_dim_value = maybe_cat_dim.value();
     auto cat_dim = node->input(1);
 
-    // Set the insertion point to the curent `cat` node.
+    // Set the insertion point to the current `cat` node.
     WithInsertPoint guard(node);
     auto none = graph_->insertConstant(IValue());
     auto one = graph_->insertConstant(1);
@@ -326,7 +328,7 @@ class ConcatExpander {
     //   * Create a slice of `cat` output buffer.
     auto cat_out_value = cat_out_empty->output();
     auto cat_inp_list = node->input(0)->node();
-    int start_idx = 0;
+    int64_t start_idx = 0;
     auto start = graph_->insertConstant(start_idx);
     for (auto cat_inp : cat_inp_list->inputs()) {
       // Create a slice of the cat output buffer that correspond to
@@ -336,8 +338,7 @@ class ConcatExpander {
       TORCH_INTERNAL_ASSERT(cat_inp_tensor_type);
       TORCH_INTERNAL_ASSERT(cat_inp_tensor_type->dim());
       auto cat_inp_tensortype_sizes = cat_inp_tensor_type->sizes();
-      // NOLINTNEXTLINE(bugprone-narrowing-conversions,cppcoreguidelines-narrowing-conversions)
-      int end_idx = start_idx + *cat_inp_tensortype_sizes[cat_dim_value];
+      auto end_idx = start_idx + *cat_inp_tensortype_sizes[cat_dim_value];
       auto end = graph_->insertConstant(end_idx);
 
       auto slice = graph_->create(
@@ -504,7 +505,8 @@ size_t determineUsageIdx(Value* value, Node* user) {
   const auto idx =
       std::find(user->inputs().begin(), user->inputs().end(), value) -
       user->inputs().begin();
-  TORCH_CHECK(idx != user->inputs().size());
+  using c10::ssize;
+  TORCH_CHECK(idx != ssize(user->inputs()));
   return idx;
 }
 
@@ -695,5 +697,4 @@ bool CombineConcats(const std::shared_ptr<Graph>& graph) {
   return changed;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

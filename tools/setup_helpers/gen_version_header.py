@@ -2,11 +2,14 @@
 # and use the version numbers from there as substitutions for
 # an expand_template action. Since there isn't, this silly script exists.
 
+from __future__ import annotations
+
 import argparse
 import os
-from typing import Dict, Tuple, cast
+from typing import cast
 
-Version = Tuple[int, int, int]
+
+Version = tuple[int, int, int]
 
 
 def parse_version(version: str) -> Version:
@@ -30,7 +33,7 @@ def parse_version(version: str) -> Version:
     return cast(Version, tuple([int(n) for n in version_number_str.split(".")]))
 
 
-def apply_replacements(replacements: Dict[str, str], text: str) -> str:
+def apply_replacements(replacements: dict[str, str], text: str) -> str:
     """
     Applies the given replacements within the text.
 
@@ -41,7 +44,7 @@ def apply_replacements(replacements: Dict[str, str], text: str) -> str:
     Returns:
       Text with replacements applied, if any.
     """
-    for (before, after) in replacements.items():
+    for before, after in replacements.items():
         text = text.replace(before, after)
     return text
 
@@ -62,7 +65,7 @@ def main(args: argparse.Namespace) -> None:
 
     with open(args.template_path) as input:
         with open(args.output_path, "w") as output:
-            for line in input.readlines():
+            for line in input:
                 output.write(apply_replacements(replacements, line))
 
 
@@ -76,7 +79,9 @@ if __name__ == "__main__":
         help="Path to the template (i.e. version.h.in)",
     )
     parser.add_argument(
-        "--version-path", required=True, help="Path to the file specifying the version",
+        "--version-path",
+        required=True,
+        help="Path to the file specifying the version",
     )
     parser.add_argument(
         "--output-path",

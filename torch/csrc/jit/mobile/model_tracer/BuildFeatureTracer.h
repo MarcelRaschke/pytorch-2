@@ -1,14 +1,12 @@
 #pragma once
 
 #include <ATen/record_function.h>
+#include <c10/util/Synchronized.h>
 #include <map>
-#include <mutex>
 #include <set>
 #include <string>
 
-namespace torch {
-namespace jit {
-namespace mobile {
+namespace torch::jit::mobile {
 
 /* The BuildFeatureTracer class handles the attachment and removal of a
  * recording callback that traces the invocation of code that handles executing
@@ -29,15 +27,11 @@ struct BuildFeatureTracer final {
   typedef std::set<std::string> build_feature_type;
 
   BuildFeatureTracer();
-  static build_feature_type& getBuildFeatures();
-  /* Protect concurrent writes into the set. */
-  static std::mutex& getMutex();
+  static c10::Synchronized<build_feature_type>& getBuildFeatures();
 
   ~BuildFeatureTracer() {
     at::removeCallback(handle_);
   }
 };
 
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::mobile

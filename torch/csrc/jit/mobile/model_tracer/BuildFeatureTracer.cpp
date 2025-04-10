@@ -1,15 +1,15 @@
 #include <torch/csrc/jit/mobile/model_tracer/BuildFeatureTracer.h>
 #include <mutex>
 
-namespace torch {
-namespace jit {
-namespace mobile {
+namespace torch::jit::mobile {
 BuildFeatureTracer::BuildFeatureTracer() {
   auto recorder_cb =
       [](const at::RecordFunction& fn) -> std::unique_ptr<at::ObserverContext> {
     std::string name = fn.name();
-    std::lock_guard<std::mutex> guard(getMutex());
-    getBuildFeatures().insert(name);
+    getBuildFeatures().withLock(
+        [&](BuildFeatureTracer::build_feature_type& build_features) {
+          build_features.insert(name);
+        });
     return nullptr;
   };
 
@@ -18,16 +18,10 @@ BuildFeatureTracer::BuildFeatureTracer() {
                                 .scopes({at::RecordScope::BUILD_FEATURE}));
 }
 
-BuildFeatureTracer::build_feature_type& BuildFeatureTracer::getBuildFeatures() {
-  static build_feature_type build_features;
+c10::Synchronized<BuildFeatureTracer::build_feature_type>& BuildFeatureTracer::
+    getBuildFeatures() {
+  static c10::Synchronized<build_feature_type> build_features;
   return build_features;
 }
 
-std::mutex& BuildFeatureTracer::getMutex() {
-  static std::mutex m;
-  return m;
-}
-
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::mobile

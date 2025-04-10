@@ -2,6 +2,7 @@
 #include <ATen/Config.h>
 #include <c10/macros/Macros.h>
 #include <functional>
+#include <string>
 
 namespace at {
 
@@ -28,7 +29,7 @@ TORCH_API bool in_parallel_region();
 namespace internal {
 
 // Initialise num_threads lazily at first parallel call
-inline TORCH_API void lazy_init_num_threads() {
+inline void lazy_init_num_threads() {
   thread_local bool init = false;
   if (C10_UNLIKELY(!init)) {
     at::init_num_threads();
@@ -39,9 +40,8 @@ inline TORCH_API void lazy_init_num_threads() {
 TORCH_API void set_thread_num(int);
 
 class TORCH_API ThreadIdGuard {
-public:
-  ThreadIdGuard(int new_id):
-    old_id_(at::get_thread_num()) {
+ public:
+  ThreadIdGuard(int new_id) : old_id_(at::get_thread_num()) {
     set_thread_num(new_id);
   }
 
@@ -49,11 +49,11 @@ public:
     set_thread_num(old_id_);
   }
 
-private:
+ private:
   int old_id_;
 };
 
-}  // namespace internal
+} // namespace internal
 
 /*
 parallel_for
@@ -133,7 +133,7 @@ TORCH_API std::string get_parallel_info();
 TORCH_API void set_num_interop_threads(int);
 
 // Returns the number of threads used for inter-op parallelism
-TORCH_API int get_num_interop_threads();
+TORCH_API size_t get_num_interop_threads();
 
 // Launches inter-op parallel task
 TORCH_API void launch(std::function<void()> func);
@@ -142,7 +142,7 @@ void launch_no_thread_state(std::function<void()> fn);
 } // namespace internal
 
 // Launches intra-op parallel task
-TORCH_API void intraop_launch(std::function<void()> func);
+TORCH_API void intraop_launch(const std::function<void()>& func);
 
 // Returns number of intra-op threads used by default
 TORCH_API int intraop_default_num_threads();
@@ -153,8 +153,6 @@ TORCH_API int intraop_default_num_threads();
 #include <ATen/ParallelOpenMP.h> // IWYU pragma: keep
 #elif AT_PARALLEL_NATIVE
 #include <ATen/ParallelNative.h> // IWYU pragma: keep
-#elif AT_PARALLEL_NATIVE_TBB
-#include <ATen/ParallelNativeTBB.h> // IWYU pragma: keep
 #endif
 
 #include <ATen/Parallel-inl.h> // IWYU pragma: keep

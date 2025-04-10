@@ -1,8 +1,7 @@
 #include <torch/csrc/jit/passes/remove_mutation.h>
 #include <torch/csrc/jit/passes/restore_mutation.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 bool MutationRemover::removeListMutation() {
   return RemoveListMutation(graph_->block());
@@ -15,7 +14,7 @@ bool MutationRemover::removeTensorMutation() {
 bool MutationRemover::hasSideEffectOrAlias(Value* v, AliasDb* aliasDb) {
   // bail on nodes with side effects, blocks, or graph / graph inputs
   Node* n = v->node();
-  bool unhandled_node = n->blocks().size() != 0 ||
+  bool unhandled_node = !n->blocks().empty() ||
       n->hasAttribute(attr::Subgraph) || n->hasSideEffects() ||
       (v->node()->kind() == prim::Param);
 
@@ -29,8 +28,7 @@ bool MutationRemover::hasSideEffectOrAlias(Value* v, AliasDb* aliasDb) {
 Node* MutationRemover::createSpecialMappedOp(Node* n) {
   WithInsertPoint guard(n);
   auto inputs = n->inputs();
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  Node* new_node;
+  Node* new_node = nullptr;
   if (n->matches(
           "aten::fill_.Scalar(Tensor(a!) self, Scalar value) -> Tensor(a!)")) {
     auto dtype = graph_->insert(prim::dtype, {inputs.at(0)});
@@ -75,7 +73,7 @@ Node* MutationRemover::createSpecialMappedOp(Node* n) {
   return new_node;
 }
 
-bool removableSetItem(Node* n) {
+static bool removableSetItem(Node* n) {
   if (n->kind() != aten::_set_item ||
       n->input(1)->node()->kind() != prim::Constant) {
     return false;
@@ -177,7 +175,7 @@ bool MutationRemover::RemoveListMutation(Block* block) {
     // x.append(v1) (or x.insert(0, v1))
     // to:
     // x = {v0, v1} (or x = {v1, v0})
-    // We can remove x.append from the the alias db list of writes.
+    // We can remove x.append from the alias db list of writes.
     // All other aliasing properties remain valid.
     Node* list_construct = mutated_value->node();
     switch (node->kind()) {
@@ -210,7 +208,7 @@ bool MutationRemover::RemoveListMutation(Block* block) {
     }
 
     // process use-chain and aliasing of node output
-    bool has_output = (node->outputs().size() > 0);
+    bool has_output = (!node->outputs().empty());
     if (has_output) {
       node->output()->replaceAllUsesWith(mutated_value);
       getOrCreateAliasDb()->writeIndex_->erase(node);
@@ -253,8 +251,7 @@ bool MutationRemover::RemoveTensorMutation(Block* block) {
       continue;
     }
 
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Node* new_node;
+    Node* new_node = nullptr;
     if (isSpecialMappedOp(node)) {
       new_node = createSpecialMappedOp(node);
     } else {
@@ -339,7 +336,7 @@ bool MutationRemover::inplaceOpVariant(Node* n) {
   // all inplace ops at time of writing have a single input that is mutated
   // and returned. check that this is true, anything else could have strange
   // semantics,
-  if (n->outputs().size() != 1 || n->inputs().size() == 0) {
+  if (n->outputs().size() != 1 || n->inputs().empty()) {
     return false;
   }
   auto inputs = n->inputs();
@@ -350,7 +347,7 @@ bool MutationRemover::inplaceOpVariant(Node* n) {
   }
 
   auto new_schema = name.substr(0, name.size() - 1);
-  return getAllOperatorsFor(Symbol::fromQualString(new_schema)).size() != 0;
+  return !getAllOperatorsFor(Symbol::fromQualString(new_schema)).empty();
 }
 
 bool RemoveListMutation(const std::shared_ptr<Graph>& graph) {
@@ -360,7 +357,7 @@ bool RemoveListMutation(const std::shared_ptr<Graph>& graph) {
 
 bool RemoveTensorMutation(
     const std::shared_ptr<Graph>& graph,
-    c10::optional<std::function<bool(Node*)>> mutation_filter) {
+    std::optional<std::function<bool(Node*)>> mutation_filter) {
   MutationRemover mr(graph, std::move(mutation_filter));
   return mr.removeTensorMutation();
 }
@@ -380,5 +377,4 @@ bool InplaceToFunctionalActivation(const std::shared_ptr<Graph>& graph) {
   });
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

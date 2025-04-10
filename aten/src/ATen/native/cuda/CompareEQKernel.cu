@@ -1,5 +1,6 @@
 #define TORCH_ASSERT_NO_OPERATORS
 #include <ATen/Dispatch.h>
+#include <ATen/Dispatch_v2.h>
 #include <ATen/native/BinaryOps.h>
 #include <ATen/native/DispatchStub.h>
 #include <ATen/native/TensorIterator.h>
@@ -9,7 +10,7 @@
 // NOTE: CUDA on Windows requires that the enclosing function
 // of a __device__ lambda not have internal linkage.
 
-namespace at { namespace native { namespace {
+namespace at::native { namespace {
 
 enum class EqOpType {EQ, NE};
 
@@ -28,19 +29,22 @@ struct CompareEqFunctor{
  };
 }
 
+C10_NOINLINE void compare_eq_ne_kernel(TensorIteratorBase &iter, EqOpType op) {
+  AT_DISPATCH_V2(iter.common_dtype(), "compare_eq_ne_cuda", AT_WRAP([&]() {
+    opmath_symmetric_gpu_kernel_with_scalars<scalar_t, bool>(
+        iter, CompareEqFunctor<scalar_t>(op));
+  }), AT_EXPAND(AT_ALL_TYPES_AND_COMPLEX), kComplexHalf, kHalf, kBFloat16, kBool, AT_EXPAND(AT_FLOAT8_TYPES), AT_EXPAND(AT_BAREBONES_UNSIGNED_TYPES));
+}
+
 void eq_kernel_cuda(TensorIteratorBase& iter) {
-  AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND3(kHalf, kBFloat16, kBool, iter.common_dtype(), "eq_cuda", [&]() {
-    gpu_kernel_with_scalars(iter, CompareEqFunctor<scalar_t>(EqOpType::EQ));
-  });
+  compare_eq_ne_kernel(iter, EqOpType::EQ);
 }
 
 void ne_kernel_cuda(TensorIteratorBase& iter) {
-  AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND3(kHalf, kBFloat16, kBool, iter.common_dtype(), "ne_cuda", [&]() {
-    gpu_kernel_with_scalars(iter, CompareEqFunctor<scalar_t>(EqOpType::NE));
-  });
+  compare_eq_ne_kernel(iter, EqOpType::NE);
 }
 
-REGISTER_DISPATCH(eq_stub, &eq_kernel_cuda);
-REGISTER_DISPATCH(ne_stub, &ne_kernel_cuda);
+REGISTER_DISPATCH(eq_stub, &eq_kernel_cuda)
+REGISTER_DISPATCH(ne_stub, &ne_kernel_cuda)
 
-}} // namespace at::native
+} // namespace at::native

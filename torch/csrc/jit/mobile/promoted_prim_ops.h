@@ -2,8 +2,7 @@
 #include <torch/csrc/jit/mobile/prim_ops_registery.h>
 #include <torch/csrc/jit/mobile/register_ops_common_utils.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 void tupleIndex(Stack& stack);
 
@@ -19,9 +18,25 @@ void aten_format(Stack& stack);
 
 void size(Stack& stack);
 
+void sym_size(Stack& stack);
+
+void sym_size_int(Stack& stack);
+
+void sym_stride_int(Stack& stack);
+
+void sym_numel(Stack& stack);
+
+void sym_storage_offset(Stack& stack);
+
+void sym_stride(Stack& stack);
+
 void device(Stack& stack);
 
+void device_with_index(Stack& stack);
+
 void dtype(Stack& stack);
+
+void layout(Stack& stack);
 
 void toPrimDType(Stack& stack);
 
@@ -43,5 +58,4 @@ void dictIndex(Stack& stack);
 
 void raiseExceptionWithMessage(Stack& stack);
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

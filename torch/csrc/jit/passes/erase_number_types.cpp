@@ -6,10 +6,9 @@
 
 #include <ATen/ScalarOps.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
-void SetNumTypeToTensorType(Value* v) {
+static void SetNumTypeToTensorType(Value* v) {
   if (v->type()->isSubtypeOf(*NumberType::get())) {
     v->setType(TensorType::fromNumberType(*v->type()));
   } else if (v->type()->isSubtypeOf(*BoolType::get())) {
@@ -41,7 +40,7 @@ void EraseNumberTypesOnBlock(Block* block) {
 
           WithInsertPoint guard(*it);
           Value* r = block->owningGraph()->insertConstant(
-              scalar_to_tensor(s), c10::nullopt, it->scope());
+              scalar_to_tensor(s), std::nullopt, it->scope());
           r->copyMetadata(it->output());
           it->output()->replaceAllUsesWith(r);
           it.destroyCurrent();
@@ -73,5 +72,4 @@ void EraseNumberTypes(const std::shared_ptr<Graph>& graph) {
   EraseNumberTypesOnBlock(graph->block());
   GRAPH_DUMP("After EraseNumberTypes: ", graph);
 }
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

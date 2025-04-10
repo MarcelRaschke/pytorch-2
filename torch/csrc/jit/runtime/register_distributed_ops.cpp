@@ -13,19 +13,13 @@
 #include <fmt/format.h>
 #include <stdexcept>
 
-using at::Scalar;
-using at::Tensor;
 namespace dist_autograd = torch::distributed::autograd;
 namespace dist_rpc = torch::distributed::rpc;
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
-
-static auto workerInfo =
-    torch::class_<dist_rpc::WorkerInfo>("dist_rpc", "WorkerInfo")
-        .def(torch::init<std::string, int64_t>());
+distributed::rpc::RegisterWorkerInfoOnce workerInfo{};
 
 // prepare the rpc input arguments and call the C++ impls
 void prepare_and_call_rpc_op(
@@ -288,5 +282,4 @@ TORCH_LIBRARY_IMPL(aten, CatchAll, m) {
 }
 
 } // namespace
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

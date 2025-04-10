@@ -9,6 +9,7 @@
 #include <torch/csrc/jit/frontend/parser.h>
 #include <torch/csrc/jit/frontend/resolver.h>
 #include <torch/csrc/jit/runtime/jit_exception.h>
+#include <torch/csrc/utils/pybind.h>
 #include <torch/jit.h>
 #include <iostream>
 #include <stdexcept>
@@ -30,7 +31,7 @@ TEST(TestException, TestAssertion) {
 
   bool is_jit_exception = false;
   std::string message;
-  c10::optional<std::string> exception_class;
+  std::optional<std::string> exception_class;
   try {
     cu_ptr->run_method("foo");
   } catch (JITException& e) {
@@ -112,7 +113,7 @@ TEST(TestException, TestCustomException) {
   py::exec(R"PY(
   class SimpleValueError(ValueError):
     def __init__(self, message):
-      super(SimpleValueError, self).__init__(message)
+      super().__init__(message)
   )PY");
 
   std::string pythonCode = R"PY(
@@ -126,20 +127,20 @@ TEST(TestException, TestCustomException) {
   std::cerr << "Def is:\n" << def << std::endl;
   auto cu = std::make_shared<torch::jit::CompilationUnit>();
   (void)cu->define(
-      c10::nullopt,
+      std::nullopt,
       {},
       {},
       {def},
       // class PythonResolver is defined in
       // torch/csrc/jit/python/script_init.cpp. It's not in a header file so I
-      // can not use it. Create a SimpleResolver insteand
+      // can not use it. Create a SimpleResolver instead
       {std::make_shared<SimpleResolver>()},
       nullptr);
   torch::jit::GraphFunction* gf =
       (torch::jit::GraphFunction*)&cu->get_function("foo");
   std::cerr << "Graph is\n" << *gf->graph() << std::endl;
   bool is_jit_exception = false;
-  c10::optional<std::string> exception_class;
+  std::optional<std::string> exception_class;
   std::string message;
   try {
     cu->run_method("foo");

@@ -1,296 +1,265 @@
-import csv
-import json
+from __future__ import annotations
+
+import math
 import os
 import subprocess
+from pathlib import Path
+from typing import Callable, TYPE_CHECKING
 
-from tools.stats.s3_stat_parser import (
-    get_previous_reports_for_branch,
-    get_previous_reports_for_pr,
-    Report, Version2Report,
-    HAVE_BOTO3)
-from tools.stats.import_test_stats import (
-    get_disabled_tests,
-    get_slow_tests
-)
-
-from typing import Any, Dict, List, Optional, Tuple, cast
-from typing_extensions import TypedDict
-
-class JobTimeJSON(TypedDict):
-    commit: str
-    JOB_BASE_NAME: str
-    job_times: Dict[str, float]
+from tools.stats.import_test_stats import get_disabled_tests
+from tools.testing.test_run import ShardedTest, TestRun
 
 
-def _get_stripped_CI_job() -> str:
-    """E.g. convert 'pytorch_windows_vs2019_py36_cuda10.1_build' to 'pytorch_windows_vs2019_py36_cuda10.1'.
-    """
-    job = os.environ.get("JOB_BASE_NAME", "").rstrip('0123456789')
-    if job.endswith('_slow_test'):
-        job = job[:len(job) - len('_slow_test')]
-    elif job.endswith('_test') or job.endswith('-test'):
-        job = job[:len(job) - len('_test')]
-    elif job.endswith('_build') or job.endswith('-build'):
-        job = job[:len(job) - len('_build')]
-    return job
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
-def _get_job_times_json(job_times: Dict[str, float]) -> JobTimeJSON:
-    return {
-        'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], encoding="ascii").strip(),
-        'JOB_BASE_NAME': _get_stripped_CI_job(),
-        'job_times': job_times,
-    }
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+IS_MEM_LEAK_CHECK = os.getenv("PYTORCH_TEST_CUDA_MEM_LEAK_CHECK", "0") == "1"
+BUILD_ENVIRONMENT = os.getenv("BUILD_ENVIRONMENT", "")
+USE_3_PROCS = "sm86" in BUILD_ENVIRONMENT or "cuda" not in BUILD_ENVIRONMENT
+
+# NUM_PROCS_FOR_SHARDING_CALC must remain consistent across all shards of a job
+# to ensure that sharding is consistent, NUM_PROCS is the actual number of procs
+# used to run tests.  If they are not equal, the only consequence should be
+# unequal shards.
+IS_ROCM = os.path.exists("/opt/rocm")
+NUM_PROCS = 1 if IS_MEM_LEAK_CHECK else 3 if USE_3_PROCS else 2
+NUM_PROCS_FOR_SHARDING_CALC = NUM_PROCS if not IS_ROCM or IS_MEM_LEAK_CHECK else 2
+THRESHOLD = 60 * 10  # 10 minutes
+
+# See Note [ROCm parallel CI testing]
+# Special logic for ROCm GHA runners to query number of GPUs available.
+# torch.version.hip was not available to check if this was a ROCm self-hosted runner.
+# Must check for ROCm runner in another way. We look for /opt/rocm directory.
+if IS_ROCM and not IS_MEM_LEAK_CHECK:
+    try:
+        # This is the same logic used in GHA health check, see .github/templates/common.yml.j2
+        lines = (
+            subprocess.check_output(["rocminfo"], encoding="ascii").strip().split("\n")
+        )
+        count = 0
+        for line in lines:
+            if " gfx" in line:
+                count += 1
+        assert count > 0  # there must be at least 1 GPU
+        # Limiting to 8 GPUs(PROCS)
+        NUM_PROCS = min(count, 8)
+    except subprocess.CalledProcessError:
+        # The safe default for ROCm GHA runners is to run tests serially.
+        NUM_PROCS = 1
 
 
-def _calculate_job_times(reports: List["Report"]) -> Dict[str, float]:
-    """Compute test runtime by filename: ("test_file_name" -> (current_avg, # values))
-    """
-    jobs_to_times: Dict[str, Tuple[float, int]] = dict()
-    for report in reports:
-        v_report = cast(Version2Report, report)
-        assert 'format_version' in v_report.keys() and v_report.get('format_version') == 2, \
-            "S3 format currently handled is version 2 only"
-        files: Dict[str, Any] = v_report['files']
-        for name, test_file in files.items():
-            if name not in jobs_to_times:
-                jobs_to_times[name] = (test_file['total_seconds'], 1)
-            else:
-                curr_avg, curr_count = jobs_to_times[name]
-                new_count = curr_count + 1
-                new_avg = (curr_avg * curr_count + test_file['total_seconds']) / new_count
-                jobs_to_times[name] = (new_avg, new_count)
+class ShardJob:
+    def __init__(self) -> None:
+        self.serial: list[ShardedTest] = []
+        self.parallel: list[ShardedTest] = []
 
-    return {job: time for job, (time, _) in jobs_to_times.items()}
+    def get_total_time(self) -> float:
+        """Default is the value for which to substitute if a test has no time"""
+        procs = [0.0 for _ in range(NUM_PROCS_FOR_SHARDING_CALC)]
+        for test in self.parallel:
+            min_index = procs.index(min(procs))
+            procs[min_index] += test.get_time()
+        time = max(procs) + sum(test.get_time() for test in self.serial)
+        return time
+
+    def convert_to_tuple(self) -> tuple[float, list[ShardedTest]]:
+        return (self.get_total_time(), self.serial + self.parallel)
 
 
-def calculate_shards(num_shards: int, tests: List[str], job_times: Dict[str, float]) -> List[Tuple[float, List[str]]]:
-    filtered_job_times: Dict[str, float] = dict()
-    unknown_jobs : List[str] = []
-    for test in tests:
-        if test in job_times:
-            filtered_job_times[test] = job_times[test]
-        else:
-            unknown_jobs.append(test)
-
-    # The following attempts to implement a partition approximation greedy algorithm
-    # See more at https://en.wikipedia.org/wiki/Greedy_number_partitioning
-    sorted_jobs = sorted(filtered_job_times, key=lambda j: filtered_job_times[j], reverse=True)
-    sharded_jobs: List[Tuple[float, List[str]]] = [(0.0, []) for _ in range(num_shards)]
-    for job in sorted_jobs:
-        min_shard_index = sorted(range(num_shards), key=lambda i: sharded_jobs[i][0])[0]
-        curr_shard_time, curr_shard_jobs = sharded_jobs[min_shard_index]
-        curr_shard_jobs.append(job)
-        sharded_jobs[min_shard_index] = (curr_shard_time + filtered_job_times[job], curr_shard_jobs)
-
-    # Round robin the unknown jobs starting with the smallest shard
-    index = sorted(range(num_shards), key=lambda i: sharded_jobs[i][0])[0]
-    for job in unknown_jobs:
-        sharded_jobs[index][1].append(job)
-        index = (index + 1) % num_shards
-    return sharded_jobs
-
-
-def _pull_job_times_from_S3() -> Dict[str, float]:
-    if HAVE_BOTO3:
-        ci_job_prefix = _get_stripped_CI_job()
-        s3_reports: List["Report"] = get_previous_reports_for_branch('origin/viable/strict', ci_job_prefix)
-    else:
-        print('Uh oh, boto3 is not found. Either it is not installed or we failed to import s3_stat_parser.')
-        print('If not installed, please install boto3 for automatic sharding and test categorization.')
-        s3_reports = []
-
-    if len(s3_reports) == 0:
-        print('Gathered no reports from S3. Please proceed without them.')
-        return dict()
-
-    return _calculate_job_times(s3_reports)
-
-
-def _query_past_job_times(test_times_file: Optional[str] = None) -> Dict[str, float]:
-    """Read historic test job times from a file.
-
-    If the file doesn't exist or isn't matching current commit. It will download data from S3 and exported it.
-    """
-    if test_times_file and os.path.exists(test_times_file):
-        with open(test_times_file) as file:
-            test_times_json: JobTimeJSON = json.load(file)
-
-        curr_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], encoding="ascii").strip()
-        file_commit = test_times_json.get('commit', '')
-        curr_ci_job = _get_stripped_CI_job()
-        file_ci_job = test_times_json.get('JOB_BASE_NAME', 'N/A')
-        if curr_commit != file_commit:
-            print(f'Current test times file is from different commit {file_commit}.')
-        elif curr_ci_job != file_ci_job:
-            print(f'Current test times file is for different CI job {file_ci_job}.')
-        else:
-            print(f'Found stats for current commit: {curr_commit} and job: {curr_ci_job}. Proceeding with those values.')
-            return test_times_json.get('job_times', {})
-
-        # Found file, but commit or CI job in JSON doesn't match
-        print(f'Overwriting current file with stats based on current commit: {curr_commit} and CI job: {curr_ci_job}')
-
-    job_times = export_S3_test_times(test_times_file)
-
-    return job_times
-
-
-def _query_failure_test_module(reports: List[Tuple["Report", str]]) -> List[str]:
-    test_modules: List[str] = []
-    if len(reports) == 0 or len(reports[0]) == 0:
-        return test_modules
-    report = reports[0][0]
-    v_report = cast(Version2Report, report)
-    assert 'format_version' in v_report.keys() and v_report.get('format_version') == 2, \
-        "S3 format currently handled is version 2 only"
-    files: Dict[str, Any] = v_report['files']
-    for fname, file in files.items():
-        contains_failure = any(
-            any(case['status'] == 'errored' or case['status'] == 'failed'
-                for _, case in suite['cases'].items())
-            for _, suite in file['suites'].items())
-        if contains_failure:
-            test_modules.append(fname)
-    return test_modules
-
-
-def _query_changed_test_files() -> List[str]:
-    default_branch = f"origin/{os.environ.get('GIT_DEFAULT_BRANCH', 'master')}"
-    cmd = ["git", "diff", "--name-only", default_branch, "HEAD"]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    if proc.returncode != 0:
-        raise RuntimeError("Unable to get changed files")
-
-    lines = proc.stdout.decode().strip().split("\n")
-    lines = [line.strip() for line in lines]
-    return lines
-
-
-def get_shard_based_on_S3(which_shard: int, num_shards: int, tests: List[str], test_times_file: str) -> List[str]:
-    """Get sharded test allocation based on historic S3 data.
-    """
-    jobs_to_times = _query_past_job_times(test_times_file)
-
-    # Got no stats from S3, returning early to save runtime
-    if len(jobs_to_times) == 0:
-        print('Gathered no stats from S3. Proceeding with default sharding plan.')
-        return tests[which_shard - 1 :: num_shards]
-
-    shards = calculate_shards(num_shards, tests, jobs_to_times)
-    _, tests_from_shard = shards[which_shard - 1]
-    return tests_from_shard
-
-
-def get_slow_tests_based_on_S3(test_list: List[str], td_list: List[str], slow_test_threshold: int) -> List[str]:
-    """Get list of slow tests based on historic S3 data.
-    """
-    jobs_to_times: Dict[str, float] = _query_past_job_times()
-
-    # Got no stats from S3, returning early to save runtime
-    if len(jobs_to_times) == 0:
-        print('Gathered no stats from S3. No new slow tests calculated.')
-        return []
-
-    slow_tests: List[str] = []
-    for test in test_list:
-        if test in jobs_to_times and test not in td_list:
-            if jobs_to_times[test] > slow_test_threshold:
-                slow_tests.append(test)
-    return slow_tests
-
-
-def get_specified_test_cases(filename: str, tests: List[str]) -> Dict[str, List[str]]:
-    """Get test cases from a specified test case file. Usually exported manually or through CI system.
-    """
-    if not os.path.exists(filename):
-        print(f'Could not find specified tests file: {filename}. Proceeding with default behavior.')
-        return dict()
-
-    # The below encoding is utf-8-sig because utf-8 doesn't properly handle the byte-order-mark character
-    with open(filename, mode='r', encoding="utf-8-sig") as csv_file:
-        csv_reader = csv.DictReader(csv_file)
-        line_count = 0
-        specified_test_case_dict: Dict[str, List[str]] = dict()
-        for row in csv_reader:
-            line_count += 1
-            if line_count == 1:
-                if 'test_filename' not in row or 'test_case_name' not in row:
-                    print('Data is missing necessary columns for test specification. Proceeding with default behavior.')
-                    return dict()
-            test_filename = row['test_filename']
-            test_case_name = row['test_case_name']
-            if test_filename not in tests:
-                print(f'Specified test_filename {test_filename} not found in TESTS. Skipping.')
-                continue
-            if test_filename not in specified_test_case_dict:
-                specified_test_case_dict[test_filename] = []
-            specified_test_case_dict[test_filename].append(test_case_name)
-        print(f'Processed {line_count} test cases.')
-        return specified_test_case_dict
-
-
-def get_reordered_tests(tests: List[str], is_reordering_by_pr: bool) -> List[str]:
-    """Get the reordered test filename list based on github PR history or git changed file.
-    """
-    prioritized_tests = []
-    # Try using historic stats from PR.
-    if is_reordering_by_pr and HAVE_BOTO3:
-        pr_number = os.environ.get("PR_NUMBER", os.environ.get("CIRCLE_PR_NUMBER", ""))
-        if len(pr_number):
-            ci_job_prefix = _get_stripped_CI_job()
-            s3_reports: List[Tuple["Report", str]] = get_previous_reports_for_pr(
-                pr_number, ci_job_prefix)
-            prioritized_tests = _query_failure_test_module(s3_reports)
-            print("Prioritized test from previous CI info.")
-
-    # Using file changes priority if no stats found from previous PR.
-    if len(prioritized_tests) == 0:
-        try:
-            changed_files = _query_changed_test_files()
-        except Exception:
-            # If unable to get changed files from git, quit without doing any sorting
-            return tests
-
-        prefix = f"test{os.path.sep}"
-        prioritized_tests = [f for f in changed_files if f.startswith(prefix) and f.endswith(".py")]
-        prioritized_tests = [f[len(prefix):] for f in prioritized_tests]
-        prioritized_tests = [f[:-len(".py")] for f in prioritized_tests]
-        print("Prioritized test from test file changes.")
-
-    bring_to_front = []
-    the_rest = []
+def get_with_pytest_shard(
+    tests: Sequence[TestRun],
+    test_file_times: dict[str, float],
+    test_class_times: dict[str, dict[str, float]] | None,
+) -> list[ShardedTest]:
+    sharded_tests: list[ShardedTest] = []
 
     for test in tests:
-        if test in prioritized_tests:
-            bring_to_front.append(test)
+        duration = get_duration(test, test_file_times, test_class_times or {})
+
+        if duration and duration > THRESHOLD:
+            num_shards = math.ceil(duration / THRESHOLD)
+            for i in range(num_shards):
+                sharded_tests.append(
+                    ShardedTest(test, i + 1, num_shards, duration / num_shards)
+                )
         else:
-            the_rest.append(test)
-    if len(tests) == len(bring_to_front) + len(the_rest):
-        print(f"reordering tests for PR:\n"
-              f"prioritized: {bring_to_front}\nthe rest: {the_rest}\n")
-        return bring_to_front + the_rest
+            sharded_tests.append(ShardedTest(test, 1, 1, duration))
+    return sharded_tests
+
+
+def get_duration(
+    test: TestRun,
+    test_file_times: dict[str, float],
+    test_class_times: dict[str, dict[str, float]],
+) -> float | None:
+    """Calculate the time for a TestRun based on the given test_file_times and
+    test_class_times.  Returns None if the time is unknown."""
+    file_duration = test_file_times.get(test.test_file, None)
+    if test.is_full_file():
+        return file_duration
+
+    def get_duration_for_classes(
+        test_file: str, test_classes: frozenset[str]
+    ) -> float | None:
+        duration: float = 0
+
+        for test_class in test_classes:
+            class_duration = test_class_times.get(test_file, {}).get(test_class, None)
+            if class_duration is None:
+                return None
+            duration += class_duration
+        return duration
+
+    included = test.included()
+    excluded = test.excluded()
+    included_classes_duration = get_duration_for_classes(test.test_file, included)
+    excluded_classes_duration = get_duration_for_classes(test.test_file, excluded)
+
+    if included_classes_duration is None or excluded_classes_duration is None:
+        # Didn't get the time for all classes, so time is unknown
+        return None
+
+    if included:
+        return included_classes_duration
+    assert excluded, (
+        f"TestRun {test} is not full file but doesn't have included or excluded classes"
+    )
+    if file_duration is None:
+        return None
+    return file_duration - excluded_classes_duration
+
+
+def shard(
+    sharded_jobs: list[ShardJob],
+    pytest_sharded_tests: Sequence[ShardedTest],
+    estimated_time_limit: float | None = None,
+    serial: bool = False,
+) -> None:
+    # Modifies sharded_jobs in place
+    if len(sharded_jobs) == 0:
+        assert len(pytest_sharded_tests) == 0, (
+            "No shards provided but there are tests to shard"
+        )
+        return
+
+    round_robin_index = 0
+
+    def _get_min_sharded_job(
+        sharded_jobs: list[ShardJob], test: ShardedTest
+    ) -> ShardJob:
+        if test.time is None:
+            nonlocal round_robin_index
+            job = sharded_jobs[round_robin_index % len(sharded_jobs)]
+            round_robin_index += 1
+            return job
+        return min(sharded_jobs, key=lambda j: j.get_total_time())
+
+    def _shard_serial(
+        tests: Sequence[ShardedTest], sharded_jobs: list[ShardJob]
+    ) -> None:
+        assert estimated_time_limit is not None, "Estimated time limit must be provided"
+        new_sharded_jobs = sharded_jobs
+        for test in tests:
+            if (
+                len(sharded_jobs) > 1
+                and sharded_jobs[-1].get_total_time() > estimated_time_limit
+            ):
+                new_sharded_jobs = sharded_jobs[:-1]
+            min_sharded_job = _get_min_sharded_job(new_sharded_jobs, test)
+            min_sharded_job.serial.append(test)
+
+    def _shard_parallel(
+        tests: Sequence[ShardedTest], sharded_jobs: list[ShardJob]
+    ) -> None:
+        for test in tests:
+            min_sharded_job = _get_min_sharded_job(sharded_jobs, test)
+            min_sharded_job.parallel.append(test)
+
+    if serial:
+        _shard_serial(pytest_sharded_tests, sharded_jobs)
     else:
-        print(f"Something went wrong in CI reordering, expecting total of {len(tests)}:\n"
-              f"but found prioritized: {len(bring_to_front)}\nthe rest: {len(the_rest)}\n")
-        return tests
+        _shard_parallel(pytest_sharded_tests, sharded_jobs)
+
+    return
 
 
-# TODO Refactor this and unify with tools.stats.export_slow_tests
-def export_S3_test_times(test_times_filename: Optional[str] = None) -> Dict[str, float]:
-    test_times: Dict[str, float] = _pull_job_times_from_S3()
-    if test_times_filename is not None:
-        print(f'Exporting S3 test stats to {test_times_filename}.')
-        if os.path.exists(test_times_filename):
-            print(f'Overwriting existent file: {test_times_filename}')
-        with open(test_times_filename, 'w+') as file:
-            job_times_json = _get_job_times_json(test_times)
-            json.dump(job_times_json, file, indent='    ', separators=(',', ': '))
-            file.write('\n')
-    return test_times
+def calculate_shards(
+    num_shards: int,
+    tests: Sequence[TestRun],
+    test_file_times: dict[str, float],
+    test_class_times: dict[str, dict[str, float]] | None,
+    must_serial: Callable[[str], bool] | None = None,
+    sort_by_time: bool = True,
+) -> list[tuple[float, list[ShardedTest]]]:
+    must_serial = must_serial or (lambda x: True)
+    test_class_times = test_class_times or {}
+
+    # Divide tests into pytest shards
+    if sort_by_time:
+        known_tests = [
+            x
+            for x in tests
+            if get_duration(x, test_file_times, test_class_times) is not None
+        ]
+        unknown_tests = [x for x in tests if x not in known_tests]
+
+        pytest_sharded_tests = sorted(
+            get_with_pytest_shard(known_tests, test_file_times, test_class_times),
+            key=lambda j: j.get_time(),
+            reverse=True,
+        ) + get_with_pytest_shard(unknown_tests, test_file_times, test_class_times)
+    else:
+        pytest_sharded_tests = get_with_pytest_shard(
+            tests, test_file_times, test_class_times
+        )
+    del tests
+
+    serial_tests = [test for test in pytest_sharded_tests if must_serial(test.name)]
+    parallel_tests = [test for test in pytest_sharded_tests if test not in serial_tests]
+
+    serial_time = sum(test.get_time() for test in serial_tests)
+    parallel_time = sum(test.get_time() for test in parallel_tests)
+    total_time = serial_time + parallel_time / NUM_PROCS_FOR_SHARDING_CALC
+    estimated_time_per_shard = total_time / num_shards
+    # Separate serial tests from parallel tests as much as possible to maximize
+    # parallelism by putting all the serial tests on the first num_serial_shards
+    # shards. The estimated_time_limit is the estimated time it should take for
+    # the least filled serial shard. Ex if we have 8 min of serial tests, 20 min
+    # of parallel tests, 6 shards, and 2 procs per machine, we would expect each
+    # machine to take 3 min and should aim for 3 serial shards, with shards 1
+    # and 2 taking 3 min and shard 3 taking 2 min.  The estimated time limit
+    # would be 2 min. This ensures that the first few shard contains as many
+    # serial tests as possible and as few parallel tests as possible. The least
+    # filled/last (in the example, the 3rd) shard may contain a lot of both
+    # serial and parallel tests.
+    estimated_time_limit = 0.0
+    if estimated_time_per_shard != 0:
+        estimated_time_limit = serial_time % estimated_time_per_shard
+    if estimated_time_limit <= 0.01:
+        estimated_time_limit = estimated_time_per_shard
+    if total_time == 0:
+        num_serial_shards = num_shards
+    else:
+        num_serial_shards = max(math.ceil(serial_time / total_time * num_shards), 1)
+
+    sharded_jobs = [ShardJob() for _ in range(num_shards)]
+    shard(
+        sharded_jobs=sharded_jobs[:num_serial_shards],
+        pytest_sharded_tests=serial_tests,
+        estimated_time_limit=estimated_time_limit,
+        serial=True,
+    )
+    shard(
+        sharded_jobs=sharded_jobs,
+        pytest_sharded_tests=parallel_tests,
+        serial=False,
+    )
+
+    return [job.convert_to_tuple() for job in sharded_jobs]
 
 
 def get_test_case_configs(dirpath: str) -> None:
-    get_slow_tests(dirpath=dirpath)
     get_disabled_tests(dirpath=dirpath)

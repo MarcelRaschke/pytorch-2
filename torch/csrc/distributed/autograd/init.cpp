@@ -1,14 +1,13 @@
 #include <torch/csrc/autograd/python_cpp_function.h>
 #include <torch/csrc/distributed/autograd/autograd.h>
+#include <torch/csrc/distributed/autograd/python_autograd.h>
 #include <torch/csrc/jit/python/pybind_utils.h>
 #include <torch/csrc/python_headers.h>
 #include <torch/csrc/utils/object_ptr.h>
 #include <torch/csrc/utils/pybind.h>
 #include <torch/types.h>
 
-namespace torch {
-namespace distributed {
-namespace autograd {
+namespace torch::distributed::autograd {
 
 namespace {
 
@@ -28,7 +27,8 @@ PyObject* dist_autograd_init(PyObject* _unused, PyObject* noargs) {
   }
 
   auto torch_C_m = py::handle(torch_C_module).cast<py::module>();
-  auto m = torch_C_m.def_submodule("_distributed_autograd", "distributed autograd bindings");
+  auto m = torch_C_m.def_submodule(
+      "_distributed_autograd", "distributed autograd bindings");
 
   auto module = py::handle(m).cast<py::module>();
 
@@ -225,16 +225,11 @@ Example::
 } // namespace
 
 static PyMethodDef methods[] = { // NOLINT
-    {"_dist_autograd_init",
-     dist_autograd_init,
-     METH_NOARGS,
-     nullptr},
+    {"_dist_autograd_init", dist_autograd_init, METH_NOARGS, nullptr},
     {nullptr, nullptr, 0, nullptr}};
 
 PyMethodDef* python_functions() {
   return methods;
 }
 
-} // namespace autograd
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::autograd

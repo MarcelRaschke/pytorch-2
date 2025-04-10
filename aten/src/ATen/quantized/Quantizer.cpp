@@ -4,17 +4,16 @@
 #include <ATen/core/Tensor.h>
 #include <ATen/detail/CUDAHooksInterface.h>
 #include <ATen/Dispatch.h>
-#include <ATen/native/quantized/affine_quantizer.h>
+#include <ATen/native/quantized/AffineQuantizer.h>
 #include <ATen/native/TensorFactories.h>
 #include <ATen/NativeFunctions.h>
-#include <ATen/Parallel.h>
 #include <ATen/quantized/QTensorImpl.h>
 #include <ATen/quantized/Quantizer.h>
 #include <c10/core/CPUAllocator.h>
 #include <c10/util/accumulate.h>
 
 #include <cmath>
-#include <typeinfo>
+#include <utility>
 
 namespace at {
 
@@ -82,9 +81,8 @@ QTensorImpl* get_qtensorimpl(const TensorBase& self) {
   return static_cast<QTensorImpl*>(self.unsafeGetTensorImpl());
 }
 
-int64_t get_sub_byte_tensor_size(IntArrayRef sizes, size_t dtype_itemsize, at::ScalarType t) {
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  int64_t element_per_byte;
+static int64_t get_sub_byte_tensor_size(IntArrayRef sizes, size_t dtype_itemsize, at::ScalarType t) {
+  int64_t element_per_byte = 1;
   switch(t) {
     case at::ScalarType::QUInt4x2:
       element_per_byte = 2;
@@ -96,7 +94,7 @@ int64_t get_sub_byte_tensor_size(IntArrayRef sizes, size_t dtype_itemsize, at::S
       element_per_byte = 1;
   }
   // zero dim tensor
-  if (sizes.size() == 0) {
+  if (sizes.empty()) {
     return c10::multiply_integers(sizes) * dtype_itemsize;
   }
   // Consider most inner dim as cols
@@ -111,12 +109,28 @@ inline Tensor new_qtensor(
     const TensorOptions& options,
     QuantizerPtr quantizer) {
   auto memory_format = options.memory_format_opt().value_or(MemoryFormat::Contiguous);
-  at::Allocator* allocator = options.device().is_cuda()
-    ? at::detail::getCUDAHooks().getCUDADeviceAllocator()
-    : at::getCPUAllocator();
+  auto device = options.device();
+  at::Allocator* allocator = nullptr;
+  // TODO: why isn't this just using GetAllocator
+  if (device.is_cuda()) {
+    allocator = at::detail::getCUDAHooks().getCUDADeviceAllocator();
+  } else if (at::accelerator::isAccelerator(device.type())) {
+    TORCH_INTERNAL_ASSERT(!device.is_cuda(), "CUDA should already get the allocator.");
+    allocator = at::GetAllocator(device.type());
+  } else if (device.is_cpu()) {
+    allocator = at::getCPUAllocator();
+  } else if (device.is_meta()) {
+    allocator = GetAllocator(kMeta);
+  } else {
+    TORCH_INTERNAL_ASSERT(0, "unrecognized device for new_qtensor: ", device);
+  }
 
 #ifdef USE_PYTORCH_QNNPACK
   if (at::globalContext().qEngine() == at::QEngine::QNNPACK) {
+    TORCH_CHECK(!device.is_cuda(), "It looks like you are trying to quantize a CUDA tensor ",
+                "while QNNPACK backend is enabled. Although not expected to happen in ",
+                "practice, you might have done it for testing purposes. ",
+                "Please, either change the quantization engine or move the tensor to a CPU.");
     allocator = c10::GetDefaultMobileCPUAllocator();
   }
 #endif
@@ -132,12 +146,13 @@ inline Tensor new_qtensor(
   auto scalar_type = typeMetaToScalarType(dtype);
   int64_t size_bytes = get_sub_byte_tensor_size(sizes, dtype.itemsize(), scalar_type);
 
-  auto storage = c10::make_intrusive<StorageImpl>(
+  auto storage = make_storage_impl(
       StorageImpl::use_byte_size_t(),
       size_bytes,
       allocator->allocate(size_bytes),
       allocator,
-      /*resizable=*/true);
+      /*resizable=*/true,
+      device);
   auto tensor = detail::make_tensor<QTensorImpl>(
       storage, at::DispatchKeySet(tensorDispatchKey), dtype, quantizer);
   get_qtensorimpl(tensor)->set_sizes_contiguous(sizes);
@@ -164,7 +179,7 @@ Tensor PerTensorAffineQuantizer::quantize(const Tensor& rtensor) {
   return qtensor;
 }
 
-void per_tensor_affine_dequantize_impl(
+static void per_tensor_affine_dequantize_impl(
     Tensor& rtensor,
     const Tensor& qtensor,
     const double scale,
@@ -214,7 +229,7 @@ Tensor PerChannelAffineQuantizer::quantize(const Tensor& rtensor) {
   return qtensor;
 }
 
-void per_channel_affine_dequantize_impl(
+static void per_channel_affine_dequantize_impl(
     Tensor& rtensor,
     const Tensor& qtensor,
     const Tensor& scale,
@@ -264,7 +279,7 @@ Tensor PerChannelAffineFloatQParamsQuantizer::quantize(const Tensor& rtensor) {
   return qtensor;
 }
 
-void per_channel_affine_float_q_params_dequantize_impl(
+static void per_channel_affine_float_q_params_dequantize_impl(
     Tensor& rtensor,
     const Tensor& qtensor,
     const Tensor& scale,
@@ -297,8 +312,6 @@ Tensor& PerChannelAffineFloatQParamsQuantizer::dequantize_out(
       rtensor, qtensor, scales_, zero_points_, axis_);
   return rtensor;
 }
-
-Quantizer::~Quantizer() = default;
 
 C10_EXPORT void set_quantizer_(const Tensor& self, ConstQuantizerPtr quantizer) {
   get_qtensorimpl(self)->set_quantizer_(quantizer);
@@ -352,19 +365,17 @@ Tensor from_blob_quantized_per_tensor_affine(
   const auto ndim = sizes.size();
   if (ndim > 0) {
     strides.resize(ndim);
-    // NOLINTNEXTLINE
-    int32_t i = ndim - 1;
-    // NOLINTNEXTLINE
+    int64_t i = static_cast<int64_t>(ndim - 1);
     strides[i] = 1;
     while (--i >= 0) {
-      strides[i] = sizes[i] * strides[i + 1];
+      strides[i] = sizes[i + 1] * strides[i + 1];
     }
   }
   return from_blob_quantized_per_tensor_affine(
       data,
       sizes,
       strides,
-      deleter,
+      std::move(deleter),
       scale,
       zeroPoint,
       options);
@@ -415,6 +426,25 @@ Tensor from_blob_quantized_per_channel_affine(
   get_qtensorimpl(qtensor)->set_sizes_contiguous(sizes);
 
   return qtensor;
+}
+
+Tensor UnknownQuantizer::quantize(const Tensor& tensor) {
+  TORCH_INTERNAL_ASSERT(false, "cannot call quantize on UnknownQuantizer");
+}
+Tensor UnknownQuantizer::dequantize(const Tensor& qtensor) {
+  TORCH_INTERNAL_ASSERT(false, "cannot call dequantize on UnknownQuantizer");
+}
+Tensor& UnknownQuantizer::dequantize_out(Tensor& rtensor, const Tensor& qtensor) {
+  TORCH_INTERNAL_ASSERT(false, "cannot call dequantize_out on UnknownQuantizer");
+}
+QScheme UnknownQuantizer::qscheme() const {
+  TORCH_INTERNAL_ASSERT(false, "cannot call qscheme on UnknownQuantizer");
+}
+bool UnknownQuantizer::equalTo(QuantizerPtr other) const{
+  TORCH_INTERNAL_ASSERT(false, "cannot call equalTo on UnknownQuantizer");
+}
+QuantizerPtr make_unknown_quantizer(ScalarType scalar_type) {
+  return c10::make_intrusive<UnknownQuantizer>(scalar_type);
 }
 
 } // namespace at

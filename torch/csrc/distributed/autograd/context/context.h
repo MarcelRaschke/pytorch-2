@@ -9,9 +9,7 @@
 #include <torch/csrc/distributed/autograd/functions/sendrpc_backward.h>
 #include <torch/csrc/distributed/rpc/rpc_agent.h>
 
-namespace torch {
-namespace distributed {
-namespace autograd {
+namespace torch::distributed::autograd {
 
 class RecvRpcBackward;
 
@@ -22,6 +20,7 @@ class TORCH_API DistAutogradContext {
   using GradCallback = std::function<bool(torch::Tensor&)>;
 
   explicit DistAutogradContext(int64_t contextId);
+  ~DistAutogradContext() = default;
 
   // Retrieves the autograd context id for this context.
   int64_t contextId() const;
@@ -51,8 +50,7 @@ class TORCH_API DistAutogradContext {
       const;
 
   // Adds a future message recording an outstanding RPC.
-  void addOutstandingRpc(
-      const c10::intrusive_ptr<rpc::JitFuture>& jitFuture);
+  void addOutstandingRpc(const c10::intrusive_ptr<rpc::JitFuture>& jitFuture);
 
   // Returns all gradients.
   const c10::Dict<torch::Tensor, torch::Tensor> getGradients() const;
@@ -62,7 +60,7 @@ class TORCH_API DistAutogradContext {
   // needs to be updated.
   void runGradCallbackForVariable(
       const torch::autograd::Variable& variable,
-      GradCallback&& cb);
+      const GradCallback& cb);
 
   DistAutogradContext(const DistAutogradContext&) = delete;
   DistAutogradContext& operator=(const DistAutogradContext&) = delete;
@@ -170,6 +168,4 @@ class TORCH_API ThreadLocalDistAutogradContext {
   ContextPtr prev_context_ptr_;
 };
 
-} // namespace autograd
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::autograd

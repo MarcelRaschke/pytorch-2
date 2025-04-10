@@ -1,19 +1,20 @@
 import enum
-from typing import NamedTuple
+from typing import Any, Callable, NamedTuple, Union
 
 from torch.fx.graph import Node
 
-from typing import Dict, Any, List, Union, Callable
 
 class NSSingleResultValuesType(str, enum.Enum):
-    WEIGHT = 'weight'
-    NODE_OUTPUT = 'node_output'
-    NODE_INPUT = 'node_input'
+    WEIGHT = "weight"
+    NODE_OUTPUT = "node_output"
+    NODE_INPUT = "node_input"
 
-NSSubgraph = NamedTuple(
-    'NSSubgraph',
-    [('start_node', Node), ('end_node', Node), ('base_op_node', Node)]
-)
+
+class NSSubgraph(NamedTuple):
+    start_node: Node
+    end_node: Node
+    base_op_node: Node
+
 
 # TODO(future PR): see if we can use typing_extensions's TypedDict instead
 # to properly type the various keys
@@ -35,8 +36,14 @@ NSSubgraph = NamedTuple(
 #   # index of this node within the args of the input/output node
 #   # for example, in add(x1, x2), x2 would have index_of_arg == 1
 #   'index_of_arg': 0,
+#   # precomputed comparisons of logger values to reference values
+#   'comparisons': [torch.tensor(...), ...]
+#   # name of function used for precomputed comparisons
+#   'comparison_fn_name': 'sqnr',
+#   # string representation of qconfig responsible for creating this logger
+#   'qconfig_str': 'QConfig(...)',
 # }
-NSSingleResultType = Dict[str, Any]
+NSSingleResultType = dict[str, Any]
 
 # {
 #   'layer_name_1': {  # subgraph name
@@ -49,7 +56,7 @@ NSSingleResultType = Dict[str, Any]
 #   },
 # }
 #
-NSResultsType = Dict[str, Dict[str, Dict[str, List[NSSingleResultType]]]]
+NSResultsType = dict[str, dict[str, dict[str, list[NSSingleResultType]]]]
 
 # Defines the underlying target type of a node, for example:
 # `F.conv1d` for a `call_function` conv node

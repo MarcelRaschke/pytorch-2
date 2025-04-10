@@ -1,15 +1,12 @@
 #ifndef _WIN32
-#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <csignal>
 #endif
 
 #include <sys/types.h>
 
-#include <condition_variable>
-#include <iostream>
-#include <mutex>
-#include <sstream>
+#include <memory>
 #include <thread>
 
 #include <gtest/gtest.h>
@@ -17,8 +14,8 @@
 #include <torch/cuda.h>
 
 #include <c10/util/irange.h>
-#include <c10d/FileStore.hpp>
-#include <c10d/ProcessGroupGloo.hpp>
+#include <torch/csrc/distributed/c10d/FileStore.hpp>
+#include <torch/csrc/distributed/c10d/ProcessGroupGloo.hpp>
 #include "TestUtils.hpp"
 
 using namespace c10d::test;
@@ -30,7 +27,7 @@ constexpr auto kWaitTimeout = std::chrono::milliseconds(1);
 #ifndef _WIN32
 class SignalTest {
  public:
-  SignalTest(const std::string& path) : path_(path) {}
+  SignalTest(std::string path) : path_(std::move(path)) {}
 
   ~SignalTest() {
     if (arm_.joinable()) {
@@ -41,13 +38,13 @@ class SignalTest {
   // Arms test to send signal to PID when the semaphore unlocks. This
   // happens as soon as the first collective completes successfully.
   void arm(int pid, int signal) {
-    arm_ = std::thread([=] {
+    arm_ = std::thread([this, pid, signal] {
       sem_.wait();
       kill(pid, signal);
     });
   }
 
-  c10::intrusive_ptr<::c10d::ProcessGroup::Work> run(int rank, int size) {
+  c10::intrusive_ptr<::c10d::Work> run(int rank, int size) {
     auto store = c10::make_intrusive<::c10d::FileStore>(path_, size);
 
     auto options = ::c10d::ProcessGroupGloo::Options::create();
@@ -65,7 +62,7 @@ class SignalTest {
     };
 
     // Loop until an exception happens
-    c10::intrusive_ptr<::c10d::ProcessGroup::Work> work;
+    c10::intrusive_ptr<::c10d::Work> work;
     while (true) {
       work = pg.allreduce(tensors);
       try {
@@ -85,7 +82,7 @@ class SignalTest {
   Semaphore sem_;
 };
 
-c10::intrusive_ptr<::c10d::ProcessGroup::Work> testSignal(
+c10::intrusive_ptr<::c10d::Work> testSignal(
     const std::string& path,
     int signal) {
   Fork fork;
@@ -108,9 +105,9 @@ class ProcessGroupGlooDelayed : public ::c10d::ProcessGroupGloo {
       int rank,
       int size,
       c10::intrusive_ptr<Options> options)
-      : ProcessGroupGloo(store, rank, size, options) {}
+      : ProcessGroupGloo(store, rank, size, std::move(options)) {}
 
-  c10::intrusive_ptr<::c10d::ProcessGroup::Work> send(
+  c10::intrusive_ptr<::c10d::Work> send(
       std::vector<at::Tensor>& tensors,
       int dstRank,
       int tag) override {
@@ -126,14 +123,14 @@ class CollectiveTest {
       int num,
       bool delayed = false) {
     std::vector<CollectiveTest> tests;
-    for (C10_UNUSED const auto i : c10::irange(num)) {
-      tests.emplace_back(CollectiveTest(path));
+    for ([[maybe_unused]] const auto i : c10::irange(num)) {
+      tests.emplace_back(path);
     }
 
     std::vector<std::thread> threads;
     for (const auto i : c10::irange(num)) {
-      threads.emplace_back(std::thread(
-          [i, &tests, delayed] { tests[i].start(i, tests.size(), delayed); }));
+      threads.emplace_back(
+          [i, &tests, delayed] { tests[i].start(i, tests.size(), delayed); });
     }
     for (auto& thread : threads) {
       thread.join();
@@ -144,16 +141,13 @@ class CollectiveTest {
 
   CollectiveTest(std::string path) : path_(std::move(path)) {}
 
-  CollectiveTest(CollectiveTest&& other) {
-    path_ = std::move(other.path_);
-    pg_ = std::move(other.pg_);
-  }
+  CollectiveTest(CollectiveTest&& other) noexcept = default;
 
   ::c10d::ProcessGroupGloo& getProcessGroup() {
     return *pg_;
   }
 
-  void start(int rank, int size, bool delayed) {
+  void start(int rank, size_t size, bool delayed) {
     auto store = c10::make_intrusive<::c10d::FileStore>(path_, size);
 
     // Set a timeout that is small enough to make this test run fast, but also
@@ -164,11 +158,11 @@ class CollectiveTest {
         ::c10d::ProcessGroupGloo::createDeviceForHostname("127.0.0.1"));
 
     if (!delayed) {
-      pg_ = std::unique_ptr<::c10d::ProcessGroupGloo>(
-          new ::c10d::ProcessGroupGloo(store, rank, size, options));
+      pg_ = std::make_unique<::c10d::ProcessGroupGloo>(
+          store, rank, size, options);
     } else {
-      pg_ = std::unique_ptr<ProcessGroupGlooDelayed>(
-          new ProcessGroupGlooDelayed(store, rank, size, options));
+      pg_ =
+          std::make_unique<ProcessGroupGlooDelayed>(store, rank, size, options);
     }
   }
 
@@ -180,10 +174,10 @@ class CollectiveTest {
 std::vector<std::vector<at::Tensor>> copyTensors(
     const std::vector<std::vector<at::Tensor>>& inputs) {
   std::vector<std::vector<at::Tensor>> outputs(inputs.size());
-  for(const auto i : c10::irange(inputs.size())) {
+  for (const auto i : c10::irange(inputs.size())) {
     const auto& input = inputs[i];
     std::vector<at::Tensor> output(input.size());
-    for(const auto j : c10::irange(input.size())) {
+    for (const auto j : c10::irange(input.size())) {
       output[j] = input[j].cpu();
     }
     outputs[i] = output;
@@ -192,13 +186,13 @@ std::vector<std::vector<at::Tensor>> copyTensors(
 }
 
 std::vector<std::vector<at::Tensor>> waitWork(
-    std::vector<c10::intrusive_ptr<c10d::ProcessGroup::Work>> works) {
+    const std::vector<c10::intrusive_ptr<c10d::Work>>& works) {
   std::vector<std::vector<at::Tensor>> outputTensors;
   for (auto& work : works) {
     try {
       work->wait();
     } catch (const std::exception& ex) {
-      LOG(ERROR) << "Exception received: " << ex.what() << std::endl;
+      LOG(ERROR) << "Exception received: " << ex.what() << '\n';
     }
     outputTensors.emplace_back(work->result());
   }
@@ -206,14 +200,14 @@ std::vector<std::vector<at::Tensor>> waitWork(
 }
 
 std::vector<std::vector<at::Tensor>> waitFuture(
-    std::vector<c10::intrusive_ptr<c10d::ProcessGroup::Work>> works) {
+    const std::vector<c10::intrusive_ptr<c10d::Work>>& works) {
   std::vector<std::vector<at::Tensor>> outputTensors;
   for (auto& work : works) {
     auto fut = work->getFuture();
     try {
       fut->wait();
     } catch (const std::exception& ex) {
-      LOG(ERROR) << "Exception received: " << ex.what() << std::endl;
+      LOG(ERROR) << "Exception received: " << ex.what() << '\n';
     }
     auto result = fut->value();
     if (result.isNone()) {
@@ -258,7 +252,10 @@ void checkProfiledEvents(
   }
 }
 
-void testAllreduce(const std::string& path, const at::DeviceType b) {
+void testAllreduce(
+    const std::string& path,
+    const at::DeviceType b,
+    const at::ScalarType dtype = at::kFloat) {
   const auto size = 4;
   auto tests = CollectiveTest::initialize(path, size);
 
@@ -267,14 +264,14 @@ void testAllreduce(const std::string& path, const at::DeviceType b) {
   std::vector<std::vector<int64_t>> allShapes;
   std::vector<int64_t> shapes = {16, 16};
   for (const auto i : c10::irange(size)) {
-    auto tensor = at::ones(shapes, b) * i;
+    auto tensor = at::ones(shapes, at::dtype(dtype).device(b)) * i;
     std::vector<int64_t> shapesVec = shapes;
     allShapes.emplace_back(std::move(shapesVec));
     inputs[i] = std::vector<at::Tensor>({tensor});
   }
 
   // Kick off work
-  std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> work(size);
+  std::vector<c10::intrusive_ptr<::c10d::Work>> work(size);
   const char* GLOO_ALLREDUCE_STR = "gloo:all_reduce";
   enableProfilerLegacy(ProfilerConfig(
       ProfilerState::CPU, /* report_input_shapes */ true, false));
@@ -285,13 +282,12 @@ void testAllreduce(const std::string& path, const at::DeviceType b) {
   auto outputs = waitFuture(work);
 
   auto event_lists = disableProfilerLegacy();
-  checkProfiledEvents(
-      std::move(event_lists), GLOO_ALLREDUCE_STR, size, allShapes);
+  checkProfiledEvents(event_lists, GLOO_ALLREDUCE_STR, size, allShapes);
 
   // Verify outputs
   const auto expected = (size * (size - 1)) / 2;
   for (const auto i : c10::irange(size)) {
-    auto& tensor = outputs[i][0];
+    auto tensor = outputs[i][0].to(at::kFloat);
     auto data = tensor.data_ptr<float>();
     for (const auto j : c10::irange(tensor.numel())) {
       EXPECT_EQ(data[j], expected);
@@ -301,7 +297,10 @@ void testAllreduce(const std::string& path, const at::DeviceType b) {
 
 // UsingWorkAPI tests are to make sure we still properly support work API.
 // This should go away as we deprecate it.
-void testAllreduceUsingWorkAPI(const std::string& path, const at::DeviceType b) {
+void testAllreduceUsingWorkAPI(
+    const std::string& path,
+    const at::DeviceType b,
+    const at::ScalarType dtype = at::kFloat) {
   const auto size = 4;
   auto tests = CollectiveTest::initialize(path, size);
 
@@ -310,14 +309,14 @@ void testAllreduceUsingWorkAPI(const std::string& path, const at::DeviceType b) 
   std::vector<std::vector<int64_t>> allShapes;
   std::vector<int64_t> shapes = {16, 16};
   for (const auto i : c10::irange(size)) {
-    auto tensor = at::ones(shapes, b) * i;
+    auto tensor = at::ones(shapes, at::dtype(dtype).device(b)) * i;
     std::vector<int64_t> shapesVec = shapes;
     allShapes.emplace_back(std::move(shapesVec));
     inputs[i] = std::vector<at::Tensor>({tensor});
   }
 
   // Kick off work
-  std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> work(size);
+  std::vector<c10::intrusive_ptr<::c10d::Work>> work(size);
   const char* GLOO_ALLREDUCE_STR = "gloo:all_reduce";
   enableProfilerLegacy(ProfilerConfig(
       ProfilerState::CPU, /* report_input_shapes */ true, false));
@@ -328,13 +327,12 @@ void testAllreduceUsingWorkAPI(const std::string& path, const at::DeviceType b) 
   auto outputs = waitWork(work);
 
   auto event_lists = disableProfilerLegacy();
-  checkProfiledEvents(
-      std::move(event_lists), GLOO_ALLREDUCE_STR, size, allShapes);
+  checkProfiledEvents(event_lists, GLOO_ALLREDUCE_STR, size, allShapes);
 
   // Verify outputs
   const auto expected = (size * (size - 1)) / 2;
   for (const auto i : c10::irange(size)) {
-    auto& tensor = outputs[i][0];
+    auto tensor = outputs[i][0].to(at::kFloat);
     auto data = tensor.data_ptr<float>();
     for (const auto j : c10::irange(tensor.numel())) {
       EXPECT_EQ(data[j], expected);
@@ -342,7 +340,10 @@ void testAllreduceUsingWorkAPI(const std::string& path, const at::DeviceType b) 
   }
 }
 
-void testBroadcast(const std::string& path, const at::DeviceType b) {
+void testBroadcast(
+    const std::string& path,
+    const at::DeviceType b,
+    const at::ScalarType dtype = at::kFloat) {
   const auto size = 2;
   const auto stride = 2;
   auto tests = CollectiveTest::initialize(path, size);
@@ -362,9 +363,11 @@ void testBroadcast(const std::string& path, const at::DeviceType b) {
         at::OptionalDeviceGuard deviceGuard;
         for (const auto l : c10::irange(stride)) {
           if (b == at::DeviceType::CUDA) {
-            deviceGuard.reset_device(at::Device(at::kCUDA, l));
+            deviceGuard.reset_device(
+                at::Device(at::kCUDA, static_cast<c10::DeviceIndex>(l)));
           }
-          inputs[k][l] = at::ones(shapes, b) * (k * stride + l);
+          inputs[k][l] =
+              at::ones(shapes, at::dtype(dtype).device(b)) * (k * stride + l);
         }
       }
 
@@ -376,7 +379,7 @@ void testBroadcast(const std::string& path, const at::DeviceType b) {
       const char* GLOO_BROADCAST_STR = "gloo:broadcast";
       enableProfilerLegacy(ProfilerConfig(
           ProfilerState::CPU, /* report_input_shapes */ true, false));
-      std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> work(size);
+      std::vector<c10::intrusive_ptr<::c10d::Work>> work(size);
 
       for (const auto i : c10::irange(size)) {
         work[i] = tests[i].getProcessGroup().broadcast(inputs[i], options);
@@ -386,14 +389,13 @@ void testBroadcast(const std::string& path, const at::DeviceType b) {
       auto outputs = waitFuture(work);
 
       auto event_lists = disableProfilerLegacy();
-      checkProfiledEvents(
-          std::move(event_lists), GLOO_BROADCAST_STR, size, allShapes);
+      checkProfiledEvents(event_lists, GLOO_BROADCAST_STR, size, allShapes);
 
       // Verify outputs
       const auto expected = (i * stride + j);
       for (const auto k : c10::irange(size)) {
         for (const auto l : c10::irange(stride)) {
-          auto& tensor = outputs[k][l];
+          auto tensor = outputs[k][l].to(at::kFloat);
           auto data = tensor.data_ptr<float>();
           for (const auto n : c10::irange(tensor.numel())) {
             EXPECT_EQ(data[n], expected);
@@ -417,8 +419,9 @@ void testAlltoall(const std::string& path, const at::DeviceType b) {
       {30, 31, 32, 33, 34, 35, 36},
   };
   for (const auto rank : c10::irange(size)) {
-    const std::vector<int32_t>& blob = blobs[rank];
-    inputs[rank] = at::from_blob((int32_t*)(blob.data()), blob.size()).to(b);
+    std::vector<int32_t>& blob = blobs[rank];
+    inputs[rank] =
+        at::from_blob(blob.data(), static_cast<int64_t>(blob.size())).to(b);
   }
 
   // Allocate outputs
@@ -444,19 +447,19 @@ void testAlltoall(const std::string& path, const at::DeviceType b) {
   };
 
   // Kick off work
-  std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> work(size);
-  const char * GLOO_A2A_STR = "gloo:all_to_all";
+  std::vector<c10::intrusive_ptr<::c10d::Work>> work(size);
+  const char* GLOO_A2A_STR = "gloo:all_to_all";
   std::vector<std::vector<int64_t>> allShapes;
-  for (const auto & vec : inputSplits) {
+  for (const auto& vec : inputSplits) {
     // Due to concatenation of tensors, shape will actually be the sum
     int64_t sum = 0;
-    for (const auto & s : vec) {
+    for (const auto& s : vec) {
       sum += s;
     }
     allShapes.push_back({sum});
   }
   enableProfilerLegacy(ProfilerConfig(
-          ProfilerState::CPU, /* report_input_shapes */ true, false));
+      ProfilerState::CPU, /* report_input_shapes */ true, false));
   for (const auto rank : c10::irange(size)) {
     work[rank] = tests[rank].getProcessGroup().alltoall_base(
         outputs[rank], inputs[rank], outputSplits[rank], inputSplits[rank]);
@@ -468,8 +471,7 @@ void testAlltoall(const std::string& path, const at::DeviceType b) {
   }
 
   auto event_lists = disableProfilerLegacy();
-      checkProfiledEvents(
-          std::move(event_lists), GLOO_A2A_STR, size, allShapes);
+  checkProfiledEvents(event_lists, GLOO_A2A_STR, size, allShapes);
   // Verify outputs
   std::vector<std::vector<int32_t>> expected = {
       {0, 1, 10, 11, 12, 20, 21, 30, 31},
@@ -493,8 +495,8 @@ void testBarrier(const std::string& path) {
 
   // Kick off work
   enableProfilerLegacy(ProfilerConfig(
-          ProfilerState::CPU, /* report_input_shapes */ true, false));
-  std::vector<c10::intrusive_ptr<::c10d::ProcessGroup::Work>> work(size);
+      ProfilerState::CPU, /* report_input_shapes */ true, false));
+  std::vector<c10::intrusive_ptr<::c10d::Work>> work(size);
   for (const auto i : c10::irange(size)) {
     work[i] = tests[i].getProcessGroup().barrier();
   }
@@ -503,11 +505,15 @@ void testBarrier(const std::string& path) {
   waitFuture(work);
 
   auto event_lists = disableProfilerLegacy();
-  const char * GLOO_STR = "gloo:barrier";
+  const char* GLOO_STR = "gloo:barrier";
   std::vector<std::vector<int64_t>> allShapes;
   // Barrier does not use tensors, so skip shape checking.
-      checkProfiledEvents(
-          std::move(event_lists), GLOO_STR, size, allShapes, /* verify_shapes */ false);
+  checkProfiledEvents(
+      event_lists,
+      GLOO_STR,
+      size,
+      allShapes,
+      /* verify_shapes */ false);
 }
 
 void testMonitoredBarrier(const std::string& path) {
@@ -515,36 +521,37 @@ void testMonitoredBarrier(const std::string& path) {
   auto tests = CollectiveTest::initialize(path, size);
   // Non-failure case: all ranks pass the blocking monitored barrier.
   auto runMonitoredBarrier = [&](int i) {
-      tests[i].getProcessGroup().monitoredBarrier();
+    tests[i].getProcessGroup().monitoredBarrier();
   };
   std::vector<std::thread> threads;
   threads.reserve(size);
-  for(const auto r : c10::irange(size)) {
-    threads.emplace_back(std::thread([=]() { runMonitoredBarrier(r); }));
+  for (const auto r : c10::irange(size)) {
+    threads.emplace_back([=]() { runMonitoredBarrier(r); });
   }
-  for (auto & t : threads) {
+  for (auto& t : threads) {
     t.join();
   }
-  // Failure case: Only rank 0 calls into monitored barrier, should result in error
+  // Failure case: Only rank 0 calls into monitored barrier, should result in
+  // error
   auto runMonitoredBarrierWithException = [&](int i) {
-      if (i != 0) {
-        return;
-      }
+    if (i != 0) {
+      return;
+    }
 
-      try {
-          tests[i].getProcessGroup().monitoredBarrier();
-          FAIL() << "Exception should have been thrown.";
-      } catch (const std::exception& e) {
-          auto pos = std::string(e.what()).find("Rank 1");
-          EXPECT_TRUE(pos != std::string::npos);
-      }
+    try {
+      tests[i].getProcessGroup().monitoredBarrier();
+      FAIL() << "Exception should have been thrown.";
+    } catch (const std::exception& e) {
+      auto pos = std::string(e.what()).find("Rank 1");
+      EXPECT_TRUE(pos != std::string::npos);
+    }
   };
   threads.clear();
-  for(const auto r : c10::irange(size)) {
-      threads.emplace_back(std::thread([=]() { runMonitoredBarrierWithException(r); }));
+  for (const auto r : c10::irange(size)) {
+    threads.emplace_back([=]() { runMonitoredBarrierWithException(r); });
   }
-  for (auto & t : threads) {
-      t.join();
+  for (auto& t : threads) {
+    t.join();
   }
 }
 
@@ -595,17 +602,17 @@ void testSend(const std::string& path) {
   };
   auto& pg = tests[selfRank].getProcessGroup();
   const char* GLOO_SEND_STR = "gloo:send";
-  enableProfilerLegacy(ProfilerConfig(ProfilerState::CPU, /* report_input_shapes */ true, false));
+  enableProfilerLegacy(ProfilerConfig(
+      ProfilerState::CPU, /* report_input_shapes */ true, false));
   auto sendWork = pg.send(tensors, dstRank, tag);
-  bool sendCompleted;
+  bool sendCompleted = false;
   std::thread waitSendThreadAbort([&]() { sendCompleted = sendWork->wait(); });
   sendWork->abort();
   // Block until the sendWork gets successfully aborted
   waitSendThreadAbort.join();
   EXPECT_FALSE(sendCompleted);
   auto event_lists = disableProfilerLegacy();
-  checkProfiledEvents(
-      std::move(event_lists), GLOO_SEND_STR, 1, allShapes);
+  checkProfiledEvents(event_lists, GLOO_SEND_STR, 1, allShapes);
 
   // Now create a separate sender thread to ensure that future waitsends can
   // complete successfully.
@@ -645,17 +652,17 @@ void testRecv(const std::string& path) {
   };
   const char* GLOO_RECV_STR = "gloo:recv";
   auto& pg = tests[selfRank].getProcessGroup();
-  enableProfilerLegacy(ProfilerConfig(ProfilerState::CPU, /* report_input_shapes */ true, false));
+  enableProfilerLegacy(ProfilerConfig(
+      ProfilerState::CPU, /* report_input_shapes */ true, false));
   auto recvWork = pg.recv(tensors, srcRank, tag);
-  bool recvCompleted;
+  bool recvCompleted = false;
   std::thread waitRecvThreadAbort([&]() { recvCompleted = recvWork->wait(); });
   recvWork->abort();
   // Block until the first recv gets successfully aborted
   waitRecvThreadAbort.join();
   EXPECT_FALSE(recvCompleted);
   auto event_lists = disableProfilerLegacy();
-  checkProfiledEvents(
-      std::move(event_lists), GLOO_RECV_STR, 1, allShapes);
+  checkProfiledEvents(event_lists, GLOO_RECV_STR, 1, allShapes);
 
   // Now create a separate receiver thread to ensure that future waits can
   // complete successfully.
@@ -679,7 +686,6 @@ void testRecv(const std::string& path) {
   receiverThread.join();
   EXPECT_TRUE(recvCompleted);
 }
-
 
 void testStoreSetGet(const std::string& path) {
   const auto size = 2;
@@ -737,10 +743,25 @@ TEST(ProcessGroupGlooTest, testAllReduceCPU) {
   }
 }
 
+TEST(ProcessGroupGlooTest, testAllReduceBfloatCPU) {
+  {
+    TemporaryFile file;
+    testAllreduce(file.path, at::DeviceType::CPU, at::kBFloat16);
+    testAllreduceUsingWorkAPI(file.path, at::DeviceType::CPU);
+  }
+}
+
 TEST(ProcessGroupGlooTest, testBroadcastCPU) {
   {
     TemporaryFile file;
     testBroadcast(file.path, at::DeviceType::CPU);
+  }
+}
+
+TEST(ProcessGroupGlooTest, testBroadcastBfloatCPU) {
+  {
+    TemporaryFile file;
+    testBroadcast(file.path, at::DeviceType::CPU, at::kBFloat16);
   }
 }
 

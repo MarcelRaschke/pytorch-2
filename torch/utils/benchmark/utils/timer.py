@@ -2,7 +2,7 @@
 import enum
 import timeit
 import textwrap
-from typing import overload, Any, Callable, Dict, List, NoReturn, Optional, Tuple, Type, Union
+from typing import overload, Any, Callable, NoReturn, Optional, Union
 
 import torch
 from torch.utils.benchmark.utils import common, cpp_jit
@@ -13,9 +13,21 @@ from torch.utils.benchmark.utils.valgrind_wrapper import timer_interface as valg
 __all__ = ["Timer", "timer", "Language"]
 
 
-if torch.has_cuda and torch.cuda.is_available():
+if torch.backends.cuda.is_built() and torch.cuda.is_available():  # type: ignore[no-untyped-call]
     def timer() -> float:
         torch.cuda.synchronize()
+        return timeit.default_timer()
+elif torch.xpu.is_available():
+    def timer() -> float:
+        torch.xpu.synchronize()
+        return timeit.default_timer()
+elif torch._C._get_privateuse1_backend_name() != "privateuseone":
+    privateuse1_device_handler = getattr(torch, torch._C._get_privateuse1_backend_name(), None) \
+        if torch._C._get_privateuse1_backend_name() != "cpu" else None
+
+    def timer() -> float:
+        if privateuse1_device_handler:
+            privateuse1_device_handler.synchronize()
         return timeit.default_timer()
 else:
     timer = timeit.default_timer
@@ -33,7 +45,7 @@ class CPPTimer:
         setup: str,
         global_setup: str,
         timer: Callable[[], float],
-        globals: Dict[str, Any],
+        globals: dict[str, Any],
     ) -> None:
         if timer is not timeit.default_timer:
             raise NotImplementedError(
@@ -64,7 +76,7 @@ class CPPTimer:
         return self._timeit_module.timeit(number)
 
 
-class Timer(object):
+class Timer:
     """Helper class for measuring execution time of PyTorch statements.
 
     For a full tutorial on how to use this class, see:
@@ -159,20 +171,20 @@ class Timer(object):
 
         env:
             This tag indicates that otherwise identical tasks were run in
-            different environments, and are therefore not equivilent, for
+            different environments, and are therefore not equivalent, for
             instance when A/B testing a change to a kernel. `Compare` will
             treat Measurements with different `env` specification as distinct
             when merging replicate runs.
 
         num_threads:
             The size of the PyTorch threadpool when executing `stmt`. Single
-            threaded performace is important as both a key inference workload
+            threaded performance is important as both a key inference workload
             and a good indicator of intrinsic algorithmic efficiency, so the
             default is set to one. This is in contrast to the default PyTorch
             threadpool size which tries to utilize all cores.
     """
 
-    _timer_cls: Type[TimerClass] = timeit.Timer
+    _timer_cls: type[TimerClass] = timeit.Timer
 
     def __init__(
         self,
@@ -180,7 +192,7 @@ class Timer(object):
         setup: str = "pass",
         global_setup: str = "",
         timer: Callable[[], float] = timer,
-        globals: Optional[Dict[str, Any]] = None,
+        globals: Optional[dict[str, Any]] = None,
         label: Optional[str] = None,
         sub_label: Optional[str] = None,
         description: Optional[str] = None,
@@ -281,14 +293,14 @@ class Timer(object):
         self,
         number: int,
         time_hook: Callable[[], float],
-        stop_hook: Callable[[List[float]], bool],
+        stop_hook: Callable[[list[float]], bool],
         min_run_time: float,
         max_run_time: Optional[float] = None,
         callback: Optional[Callable[[int, float], NoReturn]] = None
-    ) -> List[float]:
+    ) -> list[float]:
         total_time = 0.0
         can_stop = False
-        times: List[float] = []
+        times: list[float] = []
         with common.set_torch_threads(self._task_spec.num_threads):
             while (total_time < min_run_time) or (not can_stop):
                 time_spent = time_hook()
@@ -320,36 +332,6 @@ class Timer(object):
                 number *= 10
         return number
 
-    def adaptive_autorange(
-            self,
-            threshold: float = 0.1,
-            *,
-            min_run_time: float = 0.01,
-            max_run_time: float = 10.0,
-            callback: Optional[Callable[[int, float], NoReturn]] = None,
-    ) -> common.Measurement:
-        number = self._estimate_block_size(min_run_time=0.05)
-
-        def time_hook() -> float:
-            return self._timeit(number)
-
-        def stop_hook(times: List[float]) -> bool:
-            if len(times) > 3:
-                return common.Measurement(
-                    number_per_run=number,
-                    raw_times=times,
-                    task_spec=self._task_spec
-                ).meets_confidence(threshold=threshold)
-            return False
-        times = self._threaded_measurement_loop(
-            number, time_hook, stop_hook, min_run_time, max_run_time, callback=callback)
-
-        return common.Measurement(
-            number_per_run=number,
-            raw_times=times,
-            task_spec=self._task_spec
-        )
-
     def blocked_autorange(
         self,
         callback: Optional[Callable[[int, float], NoReturn]] = None,
@@ -377,7 +359,7 @@ class Timer(object):
 
             2) A large block size better amortizes the cost of `timer`
                invocation, and results in a less biased measurement. This is
-               important because CUDA syncronization time is non-trivial
+               important because CUDA synchronization time is non-trivial
                (order single to low double digit microseconds) and would
                otherwise bias the measurement.
 
@@ -396,13 +378,76 @@ class Timer(object):
         def time_hook() -> float:
             return self._timeit(number)
 
-        def stop_hook(times: List[float]) -> bool:
+        def stop_hook(times: list[float]) -> bool:
             return True
 
         times = self._threaded_measurement_loop(
             number, time_hook, stop_hook,
             min_run_time=min_run_time,
             callback=callback)
+
+        return common.Measurement(
+            number_per_run=number,
+            raw_times=times,
+            task_spec=self._task_spec
+        )
+
+    def adaptive_autorange(
+            self,
+            threshold: float = 0.1,
+            *,
+            min_run_time: float = 0.01,
+            max_run_time: float = 10.0,
+            callback: Optional[Callable[[int, float], NoReturn]] = None,
+    ) -> common.Measurement:
+        """Similar to `blocked_autorange` but also checks for variablility in measurements
+        and repeats until iqr/median is smaller than `threshold` or `max_run_time` is reached.
+
+
+        At a high level, adaptive_autorange executes the following pseudo-code::
+
+            `setup`
+
+            times = []
+            while times.sum < max_run_time
+                start = timer()
+                for _ in range(block_size):
+                    `stmt`
+                times.append(timer() - start)
+
+                enough_data = len(times)>3 and times.sum > min_run_time
+                small_iqr=times.iqr/times.mean<threshold
+
+                if enough_data and small_iqr:
+                    break
+
+        Args:
+            threshold: value of iqr/median threshold for stopping
+
+            min_run_time: total runtime needed before checking `threshold`
+
+            max_run_time: total runtime  for all measurements regardless of `threshold`
+
+        Returns:
+            A `Measurement` object that contains measured runtimes and
+            repetition counts, and can be used to compute statistics.
+            (mean, median, etc.)
+        """
+        number = self._estimate_block_size(min_run_time=0.05)
+
+        def time_hook() -> float:
+            return self._timeit(number)
+
+        def stop_hook(times: list[float]) -> bool:
+            if len(times) > 3:
+                return common.Measurement(
+                    number_per_run=number,
+                    raw_times=times,
+                    task_spec=self._task_spec
+                ).meets_confidence(threshold=threshold)
+            return False
+        times = self._threaded_measurement_loop(
+            number, time_hook, stop_hook, min_run_time, max_run_time, callback=callback)
 
         return common.Measurement(
             number_per_run=number,
@@ -429,7 +474,7 @@ class Timer(object):
         repeats: int,
         collect_baseline: bool,
         retain_out_file: bool,
-    ) -> Tuple[valgrind_timer_interface.CallgrindStats, ...]:
+    ) -> tuple[valgrind_timer_interface.CallgrindStats, ...]:
         ...
 
     def collect_callgrind(

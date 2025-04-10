@@ -1,9 +1,8 @@
 #include <torch/csrc/jit/passes/inplace_check.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
-void CheckInplace(Block* block) {
+static void CheckInplace(Block* block) {
   for (auto node : block->nodes()) {
     if (node->kind() == prim::PythonOp && node->hasAttribute(attr::inplace)) {
       if (node->i(attr::inplace)) {
@@ -19,5 +18,4 @@ void CheckInplace(std::shared_ptr<Graph>& graph) {
   CheckInplace(graph->block());
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

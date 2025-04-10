@@ -1,24 +1,28 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
+#include <ATen/native/quantized/cpu/QuantizedOps.h>
+
+#ifndef AT_PER_OPERATOR_HEADERS
 #include <ATen/NativeFunctions.h>
-#include <torch/library.h>
-#include <ATen/native/Activation.h>
-#include <ATen/native/TensorIterator.h>
-#include <ATen/native/cpu/Loops.h>
-#include <ATen/quantized/Quantizer.h>
-#include <ATen/native/quantized/cpu/quantized_ops.h>
-#include <c10/util/irange.h>
-#include <caffe2/utils/threadpool/pthreadpool-cpp.h>
+#else
+#include <ATen/ops/gelu_native.h>
+#endif
 
-#include <algorithm>
-
-namespace at {
-namespace native {
+namespace at::native {
 
 DEFINE_DISPATCH(qgelu_stub);
 
-Tensor gelu_quantized_cpu(const Tensor& qx, c10::string_view approximate) {
+Tensor gelu_quantized_cpu(const Tensor& qx, std::string_view approximate) {
   Tensor qy;
   qgelu_stub(qx.device().type(), qx, qy, get_gelutype_enum(approximate));
   return qy;
 }
-}}  // namespace at::native
+
+Tensor& gelu_quantized_cpu_(Tensor& self, std::string_view approximate) {
+  Tensor qy = gelu_quantized_cpu(self, approximate);
+  // This can be optimized in a future PR if it becomes a bottleneck.
+  self.copy_(qy);
+  return self;
+}
+
+}  // namespace at::native

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import concurrent.futures
 import json
@@ -10,10 +12,31 @@ import sys
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Any, List, NamedTuple, Optional, Pattern
+from sysconfig import get_paths as gp
+from typing import Any, NamedTuple
 
 
+# PyTorch directory root
+def scm_root() -> str:
+    path = os.path.abspath(os.getcwd())
+    while True:
+        if os.path.exists(os.path.join(path, ".git")):
+            return path
+        if os.path.isdir(os.path.join(path, ".hg")):
+            return path
+        n = len(path)
+        path = os.path.dirname(path)
+        if len(path) == n:
+            raise RuntimeError("Unable to find SCM root")
+
+
+PYTORCH_ROOT = scm_root()
 IS_WINDOWS: bool = os.name == "nt"
+
+
+# Returns '/usr/local/include/python<version number>'
+def get_python_include_dir() -> str:
+    return gp()["include"]
 
 
 def eprint(*args: Any, **kwargs: Any) -> None:
@@ -28,15 +51,15 @@ class LintSeverity(str, Enum):
 
 
 class LintMessage(NamedTuple):
-    path: Optional[str]
-    line: Optional[int]
-    char: Optional[int]
+    path: str | None
+    line: int | None
+    char: int | None
     code: str
     severity: LintSeverity
     name: str
-    original: Optional[str]
-    replacement: Optional[str]
-    description: Optional[str]
+    original: str | None
+    replacement: str | None
+    description: str | None
 
 
 def as_posix(name: str) -> str:
@@ -44,7 +67,7 @@ def as_posix(name: str) -> str:
 
 
 # c10/core/DispatchKey.cpp:281:26: error: 'k' used after it was moved [bugprone-use-after-move]
-RESULTS_RE: Pattern[str] = re.compile(
+RESULTS_RE: re.Pattern[str] = re.compile(
     r"""(?mx)
     ^
     (?P<file>.*?):
@@ -59,15 +82,14 @@ RESULTS_RE: Pattern[str] = re.compile(
 
 
 def run_command(
-    args: List[str],
-) -> "subprocess.CompletedProcess[bytes]":
+    args: list[str],
+) -> subprocess.CompletedProcess[bytes]:
     logging.debug("$ %s", " ".join(args))
     start_time = time.monotonic()
     try:
         return subprocess.run(
             args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
         )
     finally:
@@ -75,13 +97,15 @@ def run_command(
         logging.debug("took %dms", (end_time - start_time) * 1000)
 
 
-# Severity is either "error" or "note": https://git.io/JiLOP
+# Severity is either "error" or "note":
+# https://github.com/python/mypy/blob/8b47a032e1317fb8e3f9a818005a6b63e9bf0311/mypy/errors.py#L46-L47
 severities = {
     "error": LintSeverity.ERROR,
     "warning": LintSeverity.WARNING,
 }
 
-def clang_search_dirs() -> List[str]:
+
+def clang_search_dirs() -> list[str]:
     # Compilers are ordered based on fallback preference
     # We pick the first one that is available on the system
     compilers = ["clang", "gcc", "cpp", "cc"]
@@ -93,8 +117,7 @@ def clang_search_dirs() -> List[str]:
     result = subprocess.run(
         [compiler, "-E", "-x", "c++", "-", "-v"],
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=True,
     )
     stderr = result.stderr.decode().strip().split("\n")
@@ -116,8 +139,13 @@ def clang_search_dirs() -> List[str]:
 
     return search_paths
 
+
 include_args = []
-include_dir = ["/usr/lib/llvm-11/include/openmp"] + clang_search_dirs()
+include_dir = [
+    "/usr/lib/llvm-11/include/openmp",
+    get_python_include_dir(),
+    os.path.join(PYTORCH_ROOT, "third_party/pybind11/include"),
+] + clang_search_dirs()
 for dir in include_dir:
     include_args += ["--extra-arg", f"-I{dir}"]
 
@@ -126,12 +154,12 @@ def check_file(
     filename: str,
     binary: str,
     build_dir: Path,
-) -> List[LintMessage]:
+) -> list[LintMessage]:
     try:
         proc = run_command(
             [binary, f"-p={build_dir}", *include_args, filename],
         )
-    except (OSError) as err:
+    except OSError as err:
         return [
             LintMessage(
                 path=filename,
@@ -142,9 +170,7 @@ def check_file(
                 name="command-failed",
                 original=None,
                 replacement=None,
-                description=(
-                    f"Failed due to {err.__class__.__name__}:\n{err}"
-                ),
+                description=(f"Failed due to {err.__class__.__name__}:\n{err}"),
             )
         ]
     lint_messages = []
@@ -188,10 +214,13 @@ def main() -> None:
         help="clang-tidy binary path",
     )
     parser.add_argument(
+        "--build-dir",
         "--build_dir",
         required=True,
-        help=("Where the compile_commands.json file is located. "
-              "Gets passed to clang-tidy -p"),
+        help=(
+            "Where the compile_commands.json file is located. "
+            "Gets passed to clang-tidy -p"
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -231,9 +260,17 @@ def main() -> None:
             ),
         )
         print(json.dumps(err_msg._asdict()), flush=True)
-        exit(0)
+        sys.exit(0)
 
     abs_build_dir = Path(args.build_dir).resolve()
+
+    # Get the absolute path to clang-tidy and use this instead of the relative
+    # path such as .lintbin/clang-tidy. The problem here is that os.chdir is
+    # per process, and the linter uses it to move between the current directory
+    # and the build folder. And there is no .lintbin directory in the latter.
+    # When it happens in a race condition, the linter command will fails with
+    # the following no such file or directory error: '.lintbin/clang-tidy'
+    binary_path = os.path.abspath(args.binary)
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=os.cpu_count(),
@@ -243,7 +280,7 @@ def main() -> None:
             executor.submit(
                 check_file,
                 filename,
-                args.binary,
+                binary_path,
                 abs_build_dir,
             ): filename
             for filename in args.filenames

@@ -1,13 +1,27 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <c10/util/irange.h>
 #include <cmath>
 #include <tuple>
-#include <vector>
+
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/_fake_quantize_per_tensor_affine_cachemask_tensor_qparams.h>
+#include <ATen/ops/_fused_moving_avg_obs_fq_helper.h>
+#include <ATen/ops/_fused_moving_avg_obs_fq_helper_native.h>
+#include <ATen/ops/aminmax.h>
+#include <ATen/ops/fake_quantize_per_channel_affine_cachemask.h>
+#include <ATen/ops/fused_moving_avg_obs_fake_quant_native.h>
+#include <ATen/ops/ones.h>
+#include <ATen/ops/ones_like.h>
+#endif
 
 #ifdef USE_FBGEMM
 #include <fbgemm/QuantUtils.h>
 #endif
-#include <ATen/native/quantized/cpu/quant_utils.h>
+#include <ATen/native/quantized/cpu/QuantUtils.h>
 
 namespace {
 void calculate_moving_average(
@@ -26,8 +40,8 @@ void calculate_moving_average(
   } else {
     std::tie(x_min, x_max) = at::aminmax(x);
   }
-  const float* min_curr_val = x_min.data_ptr<float>();
-  const float* max_curr_val = x_max.data_ptr<float>();
+  const float* min_curr_val = x_min.const_data_ptr<float>();
+  const float* max_curr_val = x_max.const_data_ptr<float>();
   // Moving Average Min/Max observer for input tensor
   float* running_min_val = running_min.data_ptr<float>();
   float* running_max_val = running_max.data_ptr<float>();
@@ -61,8 +75,7 @@ std::tuple<at::Tensor, at::Tensor> choose_qparams_fake_quant(
     float* x_max_data = inp_running_max.data_ptr<float>();
     for (const auto i : c10::irange(inp_running_min.numel())) {
 #ifdef USE_FBGEMM
-      fbgemm::TensorQuantizationParams x_qparams{};
-      x_qparams = fbgemm::ChooseQuantizationParams(
+      auto x_qparams = fbgemm::ChooseQuantizationParams(
           x_min_data[i],
           x_max_data[i],
           qmin,
@@ -73,8 +86,7 @@ std::tuple<at::Tensor, at::Tensor> choose_qparams_fake_quant(
       scale[i] = x_qparams.scale;
       zero_point[i] = x_qparams.zero_point;
 #else
-      quant_utils::TensorQuantizationParams x_qparams{};
-      x_qparams = quant_utils::ChooseQuantizationParams(
+      auto x_qparams = quant_utils::ChooseQuantizationParams(
           x_min_data[i],
           x_max_data[i],
           qmin,
@@ -126,8 +138,7 @@ std::tuple<at::Tensor, at::Tensor> choose_qparams_fake_quant(
 }
 } // namespace
 
-namespace at {
-namespace native {
+namespace at::native {
 
 std::tuple<at::Tensor, at::Tensor> fused_moving_avg_obs_fake_quant_cpu(
     const at::Tensor& self,
@@ -143,6 +154,7 @@ std::tuple<at::Tensor, at::Tensor> fused_moving_avg_obs_fake_quant_cpu(
     const int64_t ch_axis,
     bool per_row_fake_quant,
     bool symmetric_quant) {
+  TORCH_CHECK(ch_axis < self.dim(), "Error in fused_moving_avg_obs_fake_quant_cpu: ch_axis must be < self.dim()");
   // Calculate min/max
   auto observe = observer_on.item().toInt();
   // Calculate the size of the dimension we need to quantize over,
@@ -220,10 +232,10 @@ at::Tensor fused_moving_avg_obs_fake_quant(
     const int64_t ch_axis,
     bool per_row_fake_quant,
     bool symmetric_quant) {
-  if (self.numel() == 0) {
+  if (self.sym_numel() == 0) {
     return self.clone();
   }
-  const auto res = at::_fused_moving_avg_obs_fq_helper(
+  auto res = at::_fused_moving_avg_obs_fq_helper(
       self,
       observer_on,
       fake_quant_on,
@@ -237,7 +249,6 @@ at::Tensor fused_moving_avg_obs_fake_quant(
       ch_axis,
       per_row_fake_quant,
       symmetric_quant);
-  return std::get<0>(res);
+  return std::get<0>(std::move(res));
 }
-} // namespace native
-} // namespace at
+} // namespace at::native

@@ -15,8 +15,7 @@
 #include <torch/csrc/jit/runtime/jit_exception.h>
 #include <torch/csrc/jit/runtime/vararg_functions.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 char const* toString(OpCode op);
 std::ostream& operator<<(std::ostream& out, Instruction inst);
 namespace mobile {
@@ -110,6 +109,10 @@ bool InterpreterState::run(Stack& stack) {
       // Check with iliacher if has been done.
       // Plus this is not safe as if you throw exception record function will be
       // left enabled. That is a TODO
+      // NOTE: this recordFunction logic takes up ~2-3% of cpu cycles in some
+      // workflows. do we need it and/or can we opt-out of
+      // isRecordFunctionEnabled with a macro? if we delete it, things appear to
+      // work just fine.
       bool prev_value = isRecordFunctionEnabled();
       if (!prev_value) {
         // enable only for the RecordFunction
@@ -124,14 +127,23 @@ bool InterpreterState::run(Stack& stack) {
               mobile_debug_info->setOpIdx(pc);
             }
           }
-
+          if (inst.X < 0 ||
+              static_cast<size_t>(inst.X) >= code.op_names_.size() ||
+              static_cast<size_t>(inst.X) >= code.operators_.size()) {
+            TORCH_CHECK(false, "Can't load op with index: ", inst.X);
+          }
           RECORD_EDGE_SCOPE_WITH_DEBUG_HANDLE_AND_INPUTS(
               code.op_names_[inst.X].name, debug_handle, stack);
           code.operators_[inst.X](stack);
           frame.step();
         } break;
         case OPN: {
-          stack.push_back(inst.N);
+          if (inst.X < 0 ||
+              static_cast<size_t>(inst.X) >= code.op_names_.size() ||
+              static_cast<size_t>(inst.X) >= code.operators_.size()) {
+            TORCH_CHECK(false, "Can't load op with index: ", inst.X);
+          }
+          stack.emplace_back(inst.N);
           RECORD_EDGE_SCOPE_WITH_DEBUG_HANDLE_AND_INPUTS(
               code.op_names_[inst.X].name, debug_handle, stack);
           code.operators_[inst.X](stack);
@@ -142,6 +154,19 @@ bool InterpreterState::run(Stack& stack) {
           callFunction(function, stack);
         } break;
         case INTERFACE_CALL: {
+          if (inst.X < 0 ||
+              static_cast<size_t>(inst.X) >= code.constants_.size()) {
+            TORCH_CHECK(false, "Can't load constant with index: ", inst.X);
+          }
+          if (inst.N == 0 || inst.N > stack.size()) {
+            TORCH_CHECK(
+                false,
+                "INTERFACE_CALL N=",
+                inst.N,
+                " not in range [1, ",
+                stack.size(),
+                "]");
+          }
           torch::jit::Function& method =
               peek(stack, 0, inst.N)
                   .toObject()
@@ -178,6 +203,10 @@ bool InterpreterState::run(Stack& stack) {
           frame.step();
           break;
         case LOADC:
+          if (inst.X < 0 ||
+              static_cast<size_t>(inst.X) >= code.constants_.size()) {
+            TORCH_CHECK(false, "Can't load constant with index: ", inst.X);
+          }
           stack.emplace_back(code.constants_[inst.X]);
           frame.step();
           break;
@@ -192,8 +221,7 @@ bool InterpreterState::run(Stack& stack) {
           auto userObj = pop(stack).toObject();
           // Mobile only: since the number of slots is not known, resize the
           // numAttributes before setSlot.
-          // NOLINTNEXTLINE(clang-diagnostic-sign-compare)
-          while (userObj->type()->numAttributes() <= inst.X) {
+          while (static_cast<int>(userObj->type()->numAttributes()) <= inst.X) {
             std::stringstream ss;
             ss << userObj->type()->numAttributes();
             userObj->type()->addAttribute(ss.str(), c10::NoneType::get());
@@ -228,7 +256,7 @@ bool InterpreterState::run(Stack& stack) {
         } break;
         case RET:
           leaveFrame();
-          if (frames_.size() > 0) {
+          if (!frames_.empty()) {
             continue;
           }
           return false;
@@ -329,13 +357,12 @@ bool InterpreterState::run(Stack& stack) {
           // when STRIP_ERROR_MESSAGES is defined (which happens for production
           // mobile builds). This will cause the stack to be in an inconsistent
           // state. It has previously resulted in a SEV (S22350).
-          const auto& sref = stack.back().toStringRef();
-          TORCH_WARN(sref);
+          TORCH_WARN(stack.back().toStringRef());
           stack.pop_back();
           frame.step();
         } break;
         default:
-          AT_ERROR(toString(inst.op), " is invalid.");
+          TORCH_CHECK(false, toString(inst.op), " is invalid.");
       }
 
       if (!prev_value) {
@@ -366,9 +393,10 @@ bool InterpreterState::run(Stack& stack) {
 }
 
 IValue& InterpreterState::reg(size_t reg) {
+  TORCH_CHECK(
+      reg > 0 && reg <= registers_.size(), "Invalid register index: ", reg);
   return *(registers_.end() - reg);
 }
 
 } // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

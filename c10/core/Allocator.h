@@ -1,12 +1,20 @@
 #pragma once
 
-#include <stddef.h>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <utility>
 
 #include <c10/core/Device.h>
+#include <c10/core/DeviceType.h>
+#include <c10/macros/Export.h>
+#include <c10/macros/Macros.h>
 #include <c10/util/Exception.h>
 #include <c10/util/ThreadLocalDebugInfo.h>
 #include <c10/util/UniqueVoidPtr.h>
+#include <c10/util/irange.h>
 
 namespace c10 {
 
@@ -25,7 +33,7 @@ class C10_API DataPtr {
  public:
   // Choice of CPU here is arbitrary; if there's an "undefined" device
   // we could use that too
-  DataPtr() : ptr_(), device_(DeviceType::CPU) {}
+  DataPtr() : device_(DeviceType::CPU) {}
   DataPtr(void* data, Device device) : ptr_(data), device_(device) {}
   DataPtr(void* data, void* ctx, DeleterFnPtr ctx_deleter, Device device)
       : ptr_(data, ctx, ctx_deleter), device_(device) {}
@@ -36,6 +44,9 @@ class C10_API DataPtr {
     ptr_.clear();
   }
   void* get() const {
+    return ptr_.get();
+  }
+  void* mutable_get() {
     return ptr_.get();
   }
   void* get_context() const {
@@ -94,7 +105,7 @@ class C10_API DataPtr {
    * be; be sure to read the source code of the Allocator
    * in question to confirm this.
    */
-  C10_NODISCARD bool compare_exchange_deleter(
+  [[nodiscard]] bool compare_exchange_deleter(
       DeleterFnPtr expected_deleter,
       DeleterFnPtr new_deleter) {
     return ptr_.compare_exchange_deleter(expected_deleter, new_deleter);
@@ -148,10 +159,26 @@ inline bool operator!=(std::nullptr_t, const DataPtr& dp) noexcept {
 // possible, or the raw interface will incorrectly reported as unsupported,
 // when it is actually possible.
 
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
 struct C10_API Allocator {
   virtual ~Allocator() = default;
 
-  virtual DataPtr allocate(size_t n) const = 0;
+  virtual DataPtr allocate(size_t n) = 0;
+
+  // Clones an allocation that came from this allocator.
+  //
+  // To perform the copy, this function calls `copy_data`, which
+  // must be implemented by derived classes.
+  //
+  // Note that this explicitly ignores any context that may have been
+  // attached to the input data.
+  //
+  // Requires: input data was allocated by the same allocator.
+  DataPtr clone(const void* data, std::size_t n);
+
+  // Checks if DataPtr has a simple context, not wrapped with any out of the
+  // ordinary contexts.
+  virtual bool is_simple_data_ptr(const DataPtr& data_ptr) const;
 
   // If this returns a non nullptr, it means that allocate()
   // is guaranteed to return a unique_ptr with this deleter attached;
@@ -170,6 +197,22 @@ struct C10_API Allocator {
     AT_ASSERT(d);
     d(ptr);
   }
+
+  // Copies data from one allocation to another.
+  // Pure virtual, so derived classes must define behavior.
+  // Derived class implementation can simply call `default_copy_data`
+  // to use `std::memcpy`.
+  //
+  // Requires: src and dest were allocated by this allocator
+  // Requires: src and dest both have length >= count
+  virtual void copy_data(void* dest, const void* src, std::size_t count)
+      const = 0;
+
+ protected:
+  // Uses `std::memcpy` to copy data.
+  // Child classes can use this as `copy_data` when an alternative copy
+  // API is not needed.
+  void default_copy_data(void* dest, const void* src, std::size_t count) const;
 };
 
 // This context is used to generate DataPtr which have arbitrary
@@ -183,13 +226,32 @@ struct C10_API Allocator {
 // allocation InefficientStdFunctionContext, on top of the dynamic
 // allocation which is implied by std::function itself.
 struct C10_API InefficientStdFunctionContext {
-  std::unique_ptr<void, std::function<void(void*)>> ptr_;
-  InefficientStdFunctionContext(
-      std::unique_ptr<void, std::function<void(void*)>>&& ptr)
-      : ptr_(std::move(ptr)) {}
+  void* ptr_{nullptr};
+  std::function<void(void*)> deleter_;
+  InefficientStdFunctionContext(void* ptr, std::function<void(void*)> deleter)
+      : ptr_(ptr), deleter_(std::move(deleter)) {}
+  InefficientStdFunctionContext(const InefficientStdFunctionContext&) = delete;
+  InefficientStdFunctionContext(InefficientStdFunctionContext&& rhs) noexcept
+      : ptr_(std::exchange(rhs.ptr_, nullptr)),
+        deleter_(std::move(rhs.deleter_)) {}
+  InefficientStdFunctionContext& operator=(
+      const InefficientStdFunctionContext&) = delete;
+  // NOLINTNEXTLINE(*-noexcept-move-*)
+  InefficientStdFunctionContext& operator=(
+      InefficientStdFunctionContext&& rhs) {
+    this->~InefficientStdFunctionContext();
+    ptr_ = std::exchange(rhs.ptr_, nullptr);
+    deleter_ = std::move(rhs.deleter_);
+    return *this;
+  }
+  ~InefficientStdFunctionContext() {
+    if (deleter_) {
+      deleter_(ptr_);
+    }
+  }
   static DataPtr makeDataPtr(
       void* ptr,
-      const std::function<void(void*)>& deleter,
+      std::function<void(void*)> deleter,
       Device device);
 };
 
@@ -217,17 +279,14 @@ struct AllocatorRegisterer {
   }
 };
 
-#define REGISTER_ALLOCATOR(t, f)                  \
-  namespace {                                     \
-  static AllocatorRegisterer<t> g_allocator_d(f); \
+#define REGISTER_ALLOCATOR(t, f)                       \
+  namespace {                                          \
+  static c10::AllocatorRegisterer<t> g_allocator_d(f); \
   }
 
 // An interface for reporting thread local memory usage
 // per device
 struct C10_API MemoryReportingInfoBase : public c10::DebugInfoBase {
-  MemoryReportingInfoBase();
-  virtual ~MemoryReportingInfoBase() {}
-
   /**
    * alloc_size corresponds to the size of the ptr.
    *
@@ -239,9 +298,15 @@ struct C10_API MemoryReportingInfoBase : public c10::DebugInfoBase {
   virtual void reportMemoryUsage(
       void* ptr,
       int64_t alloc_size,
-      int64_t total_allocated,
-      int64_t total_reserved,
+      size_t total_allocated,
+      size_t total_reserved,
       Device device) = 0;
+
+  virtual void reportOutOfMemory(
+      int64_t alloc_size,
+      size_t total_allocated,
+      size_t total_reserved,
+      Device device);
 
   virtual bool memoryProfilingEnabled() const = 0;
 };
@@ -250,8 +315,120 @@ C10_API bool memoryProfilingEnabled();
 C10_API void reportMemoryUsageToProfiler(
     void* ptr,
     int64_t alloc_size,
-    int64_t total_allocated,
-    int64_t total_reserved,
+    size_t total_allocated,
+    size_t total_reserved,
     Device device);
 
+C10_API void reportOutOfMemoryToProfiler(
+    int64_t alloc_size,
+    size_t total_allocated,
+    size_t total_reserved,
+    Device device);
+
+// used to hold traceback information in allocators
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
+struct GatheredContext {
+  virtual ~GatheredContext() = default;
+};
+
+namespace CachingAllocator {
+struct Stat {
+  void increase(size_t amount) {
+    current += static_cast<int64_t>(amount);
+    peak = std::max(current, peak);
+    allocated += static_cast<int64_t>(amount);
+  }
+
+  void decrease(size_t amount) {
+    current -= static_cast<int64_t>(amount);
+    TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
+        current >= 0,
+        "Negative tracked stat in device allocator (likely logic error).");
+    freed += static_cast<int64_t>(amount);
+  }
+
+  void reset_accumulated() {
+    allocated = 0;
+    freed = 0;
+  }
+
+  void reset_peak() {
+    peak = current;
+  }
+
+  int64_t current = 0;
+  int64_t peak = 0;
+  int64_t allocated = 0;
+  int64_t freed = 0;
+};
+
+enum struct StatType : uint64_t {
+  AGGREGATE = 0,
+  SMALL_POOL = 1,
+  LARGE_POOL = 2,
+  NUM_TYPES = 3 // remember to update this whenever a new stat type is added
+};
+
+using StatArray = std::array<Stat, static_cast<size_t>(StatType::NUM_TYPES)>;
+using StatTypes = std::array<bool, static_cast<size_t>(StatType::NUM_TYPES)>;
+
+template <typename Func>
+void for_each_selected_stat_type(const StatTypes& stat_types, Func f) {
+  for (const auto stat_type : c10::irange(stat_types.size())) {
+    if (stat_types[stat_type]) {
+      f(stat_type);
+    }
+  }
+}
+
+// Structure for keeping timing information
+struct DurationStat {
+  void increase(int64_t amount) {
+    total += amount;
+    count += 1;
+    max = std::max(amount, max);
+    if (min == 0) {
+      min = amount;
+    } else {
+      min = std::min(amount, min);
+    }
+  }
+
+  void reset_accumulated() {
+    total = 0;
+    count = 0;
+  }
+
+  void reset_peak() {
+    min = 0;
+    max = 0;
+  }
+
+  int64_t total = 0;
+  int64_t max = 0;
+  int64_t min = 0;
+  int64_t count = 0;
+};
+
+// Size pretty-printer
+inline std::string format_size(uint64_t size) {
+  std::ostringstream os;
+  os.precision(2);
+  os << std::fixed;
+  if (size <= 1024) {
+    os << size << " bytes";
+  } else if (size <= 1048576) {
+    os << (static_cast<double>(size) / 1024.0);
+    os << " KiB";
+  } else if (size <= 1073741824ULL) {
+    os << static_cast<double>(size) / 1048576.0;
+    os << " MiB";
+  } else {
+    os << static_cast<double>(size) / 1073741824.0;
+    os << " GiB";
+  }
+  return os.str();
+}
+
+} // namespace CachingAllocator
 } // namespace c10

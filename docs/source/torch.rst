@@ -17,6 +17,8 @@ Tensors
     is_nonzero
     set_default_dtype
     get_default_dtype
+    set_default_device
+    get_default_device
     set_default_tensor_type
     numel
     set_printoptions
@@ -47,9 +49,14 @@ Creation Ops
 
     tensor
     sparse_coo_tensor
+    sparse_csr_tensor
+    sparse_csc_tensor
+    sparse_bsr_tensor
+    sparse_bsc_tensor
     asarray
     as_tensor
     as_strided
+    from_file
     from_numpy
     from_dlpack
     frombuffer
@@ -86,6 +93,7 @@ Indexing, Slicing, Joining, Mutating Ops
     argwhere
     cat
     concat
+    concatenate
     conj
     chunk
     dsplit
@@ -96,11 +104,13 @@ Indexing, Slicing, Joining, Mutating Ops
     hstack
     index_add
     index_copy
+    index_reduce
     index_select
     masked_select
     movedim
     moveaxis
     narrow
+    narrow_copy
     nonzero
     permute
     reshape
@@ -124,10 +134,44 @@ Indexing, Slicing, Joining, Mutating Ops
     tile
     transpose
     unbind
+    unravel_index
     unsqueeze
     vsplit
     vstack
     where
+
+.. _accelerators:
+
+Accelerators
+----------------------------------
+Within the PyTorch repo, we define an "Accelerator" as a :class:`torch.device` that is being used
+alongside a CPU to speed up computation. These device use an asynchronous execution scheme,
+using :class:`torch.Stream` and :class:`torch.Event` as their main way to perform synchronization.
+We also assume that only one such accelerator can be available at once on a given host. This allows
+us to use the current accelerator as the default device for relevant concepts such as pinned memory,
+Stream device_type, FSDP, etc.
+
+As of today, accelerator devices are (in no particular order) :doc:`"CUDA" <cuda>`, :doc:`"MTIA" <mtia>`,
+:doc:`"XPU" <xpu>`, :doc:`"MPS" <mps>`, "HPU", and PrivateUse1 (many device not in the PyTorch repo itself).
+
+Many tools in the PyTorch Ecosystem use fork to create subprocesses (for example dataloading
+or intra-op parallelism), it is thus important to delay as much as possible any
+operation that would prevent further forks. This is especially important here as most accelerator's initialization has such effect.
+In practice, you should keep in mind that checking :func:`torch.accelerator.current_accelerator`
+is a compile-time check by default, it is thus always fork-safe.
+On the contrary, passing the ``check_available=True`` flag to this function or calling
+:func:`torch.accelerator.is_available()` will usually prevent later fork.
+
+Some backends provide an experimental opt-in option to make the runtime availability
+check fork-safe. When using the CUDA device ``PYTORCH_NVML_BASED_CUDA_CHECK=1`` can be
+used for example.
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    Stream
+    Event
 
 .. _generators:
 
@@ -223,6 +267,8 @@ Parallelism
     get_num_interop_threads
     set_num_interop_threads
 
+.. _torch-rst-local-disable-grad:
+
 Locally disabling gradient computation
 --------------------------------------
 The context managers :func:`torch.no_grad`, :func:`torch.enable_grad`, and
@@ -261,13 +307,21 @@ Examples::
 
     no_grad
     enable_grad
-    set_grad_enabled
+    autograd.grad_mode.set_grad_enabled
     is_grad_enabled
-    inference_mode
+    autograd.grad_mode.inference_mode
     is_inference_mode_enabled
 
 Math operations
 ---------------
+
+Constants
+~~~~~~~~~~~~~~~~~~~~~~
+
+======================================= ===========================================
+``inf``                                     A floating-point positive infinity. Alias for :attr:`math.inf`.
+``nan``                                     A floating-point "not a number" value. This value is not a legal number. Alias for :attr:`math.nan`.
+======================================= ===========================================
 
 Pointwise Ops
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -374,6 +428,7 @@ Pointwise Ops
     sin
     sinc
     sinh
+    softmax
     sqrt
     square
     sub
@@ -530,6 +585,7 @@ Other Operations
     tril_indices
     triu
     triu_indices
+    unflatten
     vander
     view_as_real
     view_as_complex
@@ -554,7 +610,6 @@ BLAS and LAPACK Operations
     cholesky_inverse
     cholesky_solve
     dot
-    eig
     geqrf
     ger
     inner
@@ -562,13 +617,11 @@ BLAS and LAPACK Operations
     det
     logdet
     slogdet
-    lstsq
     lu
     lu_solve
     lu_unpack
     matmul
     matrix_power
-    matrix_rank
     matrix_exp
     mm
     mv
@@ -577,17 +630,82 @@ BLAS and LAPACK Operations
     outer
     pinverse
     qr
-    solve
     svd
     svd_lowrank
     pca_lowrank
-    symeig
     lobpcg
     trapz
     trapezoid
     cumulative_trapezoid
     triangular_solve
     vdot
+
+Foreach Operations
+~~~~~~~~~~~~~~~~~~
+
+.. warning::
+    This API is in beta and subject to future changes.
+    Forward-mode AD is not supported.
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    _foreach_abs
+    _foreach_abs_
+    _foreach_acos
+    _foreach_acos_
+    _foreach_asin
+    _foreach_asin_
+    _foreach_atan
+    _foreach_atan_
+    _foreach_ceil
+    _foreach_ceil_
+    _foreach_cos
+    _foreach_cos_
+    _foreach_cosh
+    _foreach_cosh_
+    _foreach_erf
+    _foreach_erf_
+    _foreach_erfc
+    _foreach_erfc_
+    _foreach_exp
+    _foreach_exp_
+    _foreach_expm1
+    _foreach_expm1_
+    _foreach_floor
+    _foreach_floor_
+    _foreach_log
+    _foreach_log_
+    _foreach_log10
+    _foreach_log10_
+    _foreach_log1p
+    _foreach_log1p_
+    _foreach_log2
+    _foreach_log2_
+    _foreach_neg
+    _foreach_neg_
+    _foreach_tan
+    _foreach_tan_
+    _foreach_sin
+    _foreach_sin_
+    _foreach_sinh
+    _foreach_sinh_
+    _foreach_round
+    _foreach_round_
+    _foreach_sqrt
+    _foreach_sqrt_
+    _foreach_lgamma
+    _foreach_lgamma_
+    _foreach_frac
+    _foreach_frac_
+    _foreach_reciprocal
+    _foreach_reciprocal_
+    _foreach_sigmoid
+    _foreach_sigmoid_
+    _foreach_trunc
+    _foreach_trunc_
+    _foreach_zero_
 
 Utilities
 ----------------------------------
@@ -604,18 +722,80 @@ Utilities
     is_deterministic_algorithms_warn_only_enabled
     set_deterministic_debug_mode
     get_deterministic_debug_mode
+    set_float32_matmul_precision
+    get_float32_matmul_precision
     set_warn_always
+    get_device_module
     is_warn_always_enabled
     vmap
     _assert
 
+Symbolic Numbers
+----------------
+.. autoclass:: SymInt
+    :members:
+
+.. autoclass:: SymFloat
+    :members:
+
+.. autoclass:: SymBool
+    :members:
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    sym_float
+    sym_fresh_size
+    sym_int
+    sym_max
+    sym_min
+    sym_not
+    sym_ite
+    sym_sum
+
+Export Path
+-------------
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+.. warning::
+    This feature is a prototype and may have compatibility breaking changes in the future.
+
+    export
+    generated/exportdb/index
+
+Control Flow
+------------
+
+.. warning::
+    This feature is a prototype and may have compatibility breaking changes in the future.
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    cond
+
+Optimizations
+-------------
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    compile
+
+`torch.compile documentation <https://pytorch.org/docs/main/torch.compiler.html>`__
+
+Operator Tags
+------------------------------------
+.. autoclass:: Tag
+    :members:
 
 .. Empty submodules added only for tracking.
 .. py:module:: torch.contrib
 .. py:module:: torch.utils.backcompat
-
-.. This submodule is split manually without a top level page.
-.. py:module:: torch.utils
 
 .. This module is only used internally for ROCm builds.
 .. py:module:: torch.utils.hipify
@@ -623,3 +803,14 @@ Utilities
 .. This module needs to be documented. Adding here in the meantime
 .. for tracking purposes
 .. py:module:: torch.utils.model_dump
+.. py:module:: torch.utils.viz
+.. py:module:: torch.functional
+.. py:module:: torch.quasirandom
+.. py:module:: torch.return_types
+.. py:module:: torch.serialization
+.. py:module:: torch.signal.windows.windows
+.. py:module:: torch.sparse.semi_structured
+.. py:module:: torch.storage
+.. py:module:: torch.torch_version
+.. py:module:: torch.types
+.. py:module:: torch.version

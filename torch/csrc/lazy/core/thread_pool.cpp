@@ -2,6 +2,7 @@
 
 #include <c10/util/Logging.h>
 #include <c10/util/irange.h>
+#include <c10/util/thread_name.h>
 #include <torch/csrc/lazy/core/config.h>
 #include <torch/csrc/lazy/core/metrics.h>
 
@@ -9,20 +10,26 @@
 #include <deque>
 #include <exception>
 #include <mutex>
+#include <thread>
 
-namespace torch {
-namespace lazy {
+namespace torch::lazy {
 namespace {
 
 class ThreadPool {
  public:
   explicit ThreadPool(size_t num_threads) {
     threads_.reserve(num_threads);
-    for (const auto i : c10::irange(num_threads)) {
-      (void)i; //Suppress unused variable warning
-      threads_.emplace_back([this]() { Worker(); });
+    for ([[maybe_unused]] const auto i : c10::irange(num_threads)) {
+      threads_.emplace_back([this]() {
+        c10::setThreadName("pt_thread_pool");
+        Worker();
+      });
     }
   }
+  ThreadPool(const ThreadPool&) = delete;
+  ThreadPool(ThreadPool&&) = delete;
+  ThreadPool& operator=(const ThreadPool&) = delete;
+  ThreadPool& operator=(ThreadPool&&) = delete;
 
   ~ThreadPool() {
     {
@@ -40,20 +47,16 @@ class ThreadPool {
     // it on a separate thread. This prevents tricky thread-pool-size-deadlocks
     // caused by an undersized thread pool and closures that end up doing sync
     // waits on the pool threads.
-    bool scheduled = false;
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::unique_lock<std::mutex> lock(mutex_);
       if (work_.size() < waiting_) {
         work_.emplace_back(std::move(closure));
-        scheduled = true;
+        lock.unlock();
+        cv_.notify_one();
+        return;
       }
     }
-    if (scheduled) {
-      cv_.notify_one();
-    } else {
-      // NOLINTNEXTLINE(bugprone-use-after-move)
-      ScheduleOnThread(std::move(closure));
-    }
+    ScheduleOnThread(std::move(closure));
   }
 
  private:
@@ -118,7 +121,7 @@ class Completion::Data {
   }
 
   static std::function<void()> GetCompleter(
-      std::shared_ptr<Data> data,
+      const std::shared_ptr<Data>& data,
       std::function<void()> closure) {
     auto closure_wrapper = [closure = std::move(closure), data]() {
       std::exception_ptr exptr;
@@ -163,5 +166,4 @@ Completion ScheduleIoClosureWithCompletion(std::function<void()> closure) {
   return Completion(std::move(data));
 }
 
-} // namespace lazy
-} // namespace torch
+} // namespace torch::lazy

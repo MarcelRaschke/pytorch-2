@@ -1,9 +1,9 @@
 // The clang-tidy job seems to complain that it can't find cudnn.h without this.
-// This file should only be compiled if this condition holds, so it should be safe.
+// This file should only be compiled if this condition holds, so it should be
+// safe.
 #if defined(USE_CUDNN) || defined(USE_ROCM)
 #include <torch/csrc/utils/pybind.h>
 
-#include <array>
 #include <tuple>
 
 namespace {
@@ -21,11 +21,11 @@ version_tuple getCompileVersion() {
 
 version_tuple getRuntimeVersion() {
 #ifndef USE_STATIC_CUDNN
-  auto version = cudnnGetVersion();
-  auto major = version / 1000;
-  auto minor = (version % 1000) / 100;
-  auto patch = version % 10;
-  return version_tuple(major, minor, patch);
+  int major = 0, minor = 0, patch = 0;
+  cudnnGetProperty(MAJOR_VERSION, &major);
+  cudnnGetProperty(MINOR_VERSION, &minor);
+  cudnnGetProperty(PATCH_LEVEL, &patch);
+  return version_tuple((size_t)major, (size_t)minor, (size_t)patch);
 #else
   return getCompileVersion();
 #endif
@@ -39,7 +39,7 @@ size_t getVersionInt() {
 #endif
 }
 
-}
+} // namespace
 #elif defined(USE_ROCM)
 #include <miopen/miopen.h>
 #include <miopen/version.h>
@@ -53,7 +53,8 @@ version_tuple getCompileVersion() {
 
 version_tuple getRuntimeVersion() {
   // MIOpen doesn't include runtime version info before 2.3.0
-#if (MIOPEN_VERSION_MAJOR > 2) || (MIOPEN_VERSION_MAJOR == 2 && MIOPEN_VERSION_MINOR > 2)
+#if (MIOPEN_VERSION_MAJOR > 2) || \
+    (MIOPEN_VERSION_MAJOR == 2 && MIOPEN_VERSION_MINOR > 2)
   size_t major, minor, patch;
   miopenGetVersion(&major, &minor, &patch);
   return version_tuple(major, minor, patch);
@@ -64,15 +65,14 @@ version_tuple getRuntimeVersion() {
 
 size_t getVersionInt() {
   // miopen version is MAJOR*1000000 + MINOR*1000 + PATCH
-  size_t major, minor, patch;
-  std::tie(major, minor, patch) = getRuntimeVersion();
+  auto [major, minor, patch] = getRuntimeVersion();
   return major * 1000000 + minor * 1000 + patch;
 }
 
-}
+} // namespace
 #endif
 
-namespace torch { namespace cuda { namespace shared {
+namespace torch::cuda::shared {
 
 void initCudnnBindings(PyObject* module) {
   auto m = py::handle(module).cast<py::module>();
@@ -80,10 +80,10 @@ void initCudnnBindings(PyObject* module) {
   auto cudnn = m.def_submodule("_cudnn", "libcudnn.so bindings");
 
   py::enum_<cudnnRNNMode_t>(cudnn, "RNNMode")
-    .value("rnn_relu", CUDNN_RNN_RELU)
-    .value("rnn_tanh", CUDNN_RNN_TANH)
-    .value("lstm", CUDNN_LSTM)
-    .value("gru", CUDNN_GRU);
+      .value("rnn_relu", CUDNN_RNN_RELU)
+      .value("rnn_tanh", CUDNN_RNN_TANH)
+      .value("lstm", CUDNN_LSTM)
+      .value("gru", CUDNN_GRU);
 
   // The runtime version check in python needs to distinguish cudnn from miopen
 #ifdef USE_CUDNN
@@ -97,7 +97,5 @@ void initCudnnBindings(PyObject* module) {
   cudnn.def("getVersionInt", getVersionInt);
 }
 
-} // namespace shared
-} // namespace cuda
-} // namespace torch
+} // namespace torch::cuda::shared
 #endif

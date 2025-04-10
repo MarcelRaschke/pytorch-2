@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <nvrtc.h>
 
-namespace at { namespace cuda {
+namespace at::cuda {
 
 
 // NOTE [ USE OF NVRTC AND DRIVER API ]
@@ -43,6 +43,7 @@ namespace at { namespace cuda {
   _(nvrtcGetProgramLogSize)                      \
   _(nvrtcGetProgramLog)                          \
   _(nvrtcGetLoweredName)                         \
+  _(cuModuleLoad)                                \
   _(cuModuleLoadData)                            \
   _(cuModuleLoadDataEx)                          \
   _(cuModuleGetFunction)                         \
@@ -51,20 +52,37 @@ namespace at { namespace cuda {
   _(cuLaunchKernel)                              \
   _(cuLaunchCooperativeKernel)                   \
   _(cuCtxGetCurrent)                             \
+  _(cuCtxSetCurrent)                             \
   _(cuModuleUnload)                              \
   _(cuDevicePrimaryCtxGetState)                  \
+  _(cuDevicePrimaryCtxRetain)                    \
   _(cuLinkCreate)                                \
   _(cuLinkAddData)                               \
-  _(cuLinkComplete)
+  _(cuLinkComplete)                              \
+  _(cuFuncSetAttribute)                          \
+  _(cuFuncGetAttribute)                          \
+  _(cuPointerGetAttribute)                       \
+  _(cuFuncSetCacheConfig)                        \
+  _(cuDeviceGetAttribute)                        \
+
+
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 12000
+#define AT_FORALL_NVRTC_EXTENDED(_)              \
+  AT_FORALL_NVRTC_BASE(_)                        \
+  _(cuTensorMapEncodeTiled)
+#else
+#define AT_FORALL_NVRTC_EXTENDED(_)              \
+  AT_FORALL_NVRTC_BASE(_)
+#endif
 
 #if defined(CUDA_VERSION) && CUDA_VERSION >= 11010
 #define AT_FORALL_NVRTC(_) \
-  AT_FORALL_NVRTC_BASE(_)  \
+  AT_FORALL_NVRTC_EXTENDED(_)  \
   _(nvrtcGetCUBINSize)     \
   _(nvrtcGetCUBIN)
 #else
 #define AT_FORALL_NVRTC(_) \
-  AT_FORALL_NVRTC_BASE(_)
+  AT_FORALL_NVRTC_EXTENDED(_)
 #endif
 
 #else
@@ -119,4 +137,4 @@ extern "C" typedef struct NVRTC {
 } NVRTC;
 
 extern "C" TORCH_CUDA_CPP_API NVRTC* load_nvrtc();
-}} // at::cuda
+} // at::cuda

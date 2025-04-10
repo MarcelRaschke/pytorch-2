@@ -14,18 +14,21 @@ class TORCH_API GlooDeviceFactory {
  public:
   // Create new device instance for specific interface.
   static std::shared_ptr<::gloo::transport::Device> makeDeviceForInterface(
-      const std::string& interface);
+      const std::string& interface,
+      bool lazyInit);
 
   // Create new device instance for specific hostname or address.
   static std::shared_ptr<::gloo::transport::Device> makeDeviceForHostname(
-      const std::string& hostname);
+      const std::string& hostname,
+      bool lazyInit);
 };
 
-C10_DECLARE_SHARED_REGISTRY(
+TORCH_DECLARE_SHARED_REGISTRY(
     GlooDeviceRegistry,
     ::gloo::transport::Device,
     const std::string&, /* interface */
-    const std::string& /* hostname */);
+    const std::string&, /* hostname */
+    bool /* lazyInit */);
 
 } // namespace c10d
 

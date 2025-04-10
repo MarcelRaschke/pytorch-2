@@ -4,8 +4,7 @@
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/passes/quantization/quantization_type.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 /** Replicate quantize node for prim::If blocks, so that we can match
  *  quantization patterns in prim::If blocks
@@ -35,5 +34,11 @@ TORCH_API Module InsertQuantDeQuant(
     bool debug,
     QuantType quant_type = QuantType::STATIC);
 
-} // namespace jit
-} // namespace torch
+TORCH_API Module InsertQuantDeQuantOnDevicePTQ(
+    Module& module,
+    const std::string& method_name,
+    bool inplace,
+    bool debug,
+    QuantType quant_type = QuantType::STATIC);
+
+} // namespace torch::jit

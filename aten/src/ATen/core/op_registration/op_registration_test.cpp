@@ -284,7 +284,8 @@ TEST(OperatorRegistrationTest, whenRegisteringMultipleKernelsInSameOpCallAndCall
   EXPECT_FALSE(called_kernel1);
   EXPECT_TRUE(called_kernel2);
 
-  for (c10::DispatchKey key : {c10::DispatchKey::XLA, c10::DispatchKey::Lazy}) {
+  // Test for out of tree lazy backends- ::Lazy key is now registered to TS backend in tree
+  for (c10::DispatchKey key : {c10::DispatchKey::XLA}) {
     std::string expectMessage = expectedMessageForBackend(key);
     expectThrows<c10::Error>([&] {
       callOp(*op, dummyTensor(key));
@@ -306,7 +307,6 @@ void stackBasedKernel(const OperatorHandle&, c10::Stack* stack) {
 }
 
 TEST(OperatorRegistrationTest, whenRegisteringMultipleKernelsByNameAndNoneCanInferSchema_thenFails) {
-  bool called_kernel = false;
   expectThrows<c10::Error>([&] {
     auto registrar1 = c10::RegisterOperators().op("_test::dummy", c10::RegisterOperators::options()
       .kernel<&stackBasedKernel>(c10::DispatchKey::CPU)
@@ -417,7 +417,7 @@ TEST(OperatorRegistrationTest, whenRegisteringMismatchingKernelsInSameOpCall_the
 }
 
 void backend_fallback_kernel(const c10::OperatorHandle& op, c10::Stack* stack) {
-  (*stack)[1] = (*stack)[1].toString()->string() + op.schema().name();
+  (*stack)[1] = (*stack)[1].toStringRef() + op.schema().name();
 }
 
 TEST(OperatorRegistrationTest, whenRegisteringBackendFallbackKernel_thenCanBeCalled) {
@@ -427,7 +427,7 @@ TEST(OperatorRegistrationTest, whenRegisteringBackendFallbackKernel_thenCanBeCal
   auto op = Dispatcher::singleton().findSchema({"_test::dummy", ""});
   ASSERT_TRUE(op.has_value());
   auto stack = callOp(*op, dummyTensor(c10::DispatchKey::CPU), "hello ");
-  EXPECT_EQ("hello _test::dummy", stack[1].toString()->string());
+  EXPECT_EQ("hello _test::dummy", stack[1].toStringRef());
 }
 
 TEST(OperatorRegistrationTest, whenRegisteringBackendFallbackKernelForWrongBackend_thenCannotBeCalled) {
@@ -471,7 +471,7 @@ TEST(OperatorRegistrationTest, whenRegisteringBackendFallbackKernelAndRegularKer
   called = false;
   auto stack = callOp(*op, dummyTensor(c10::DispatchKey::CPU), "hello ");
   EXPECT_FALSE(called);
-  EXPECT_EQ("hello _test::dummy", stack[1].toString()->string());
+  EXPECT_EQ("hello _test::dummy", stack[1].toStringRef());
 }
 
 TEST(OperatorRegistrationTest, whenRegisteringBackendFallbackKernelAndRegularKernelForSameBackend_thenCallsRegularKernel) {
@@ -531,31 +531,29 @@ TEST(OperatorRegistrationTest, whenRegisteringAutogradKernelWithRegularKernel_th
   EXPECT_TRUE(called_autograd);
 }
 
-TEST(OperatorRegistrationTest, whenRegisteringAutogradKernelWithCatchAllKernel_thenCanCallAutogradKernel) {
-  auto registrar = c10::RegisterOperators().op("_test::dummy(Tensor dummy) -> ()", c10::RegisterOperators::options()
-    .catchAllKernel<decltype(nonautograd_kernel), nonautograd_kernel>()
-    .kernel<decltype(autograd_kernel), &autograd_kernel>(DispatchKey::Autograd));
+TEST(
+    OperatorRegistrationTest,
+    whenRegisteringAutogradKernelWithCatchAllKernel_thenCanCallCatchallKernel) {
+  auto registrar = c10::RegisterOperators().op(
+      "_test::dummy(Tensor dummy) -> ()",
+      c10::RegisterOperators::options()
+          .catchAllKernel<decltype(nonautograd_kernel), nonautograd_kernel>()
+          .kernel<decltype(autograd_kernel), &autograd_kernel>(
+              DispatchKey::Autograd));
 
   auto op = Dispatcher::singleton().findSchema({"_test::dummy", ""});
   ASSERT_TRUE(op.has_value());
 
-  // catchAll now maps to CompositeImplicitAutograd which has higher precedence than Autograd
+  // catchAll now maps to CompositeImplicitAutograd which has
+  // higher precedence than Autograd
   called_nonautograd = called_autograd = false;
-  op->typed<void (Tensor)>().call(dummyTensor(DispatchKey::CPU, /*requires_grad=*/true));
+  op->typed<void(Tensor)>().call(
+      dummyTensor(DispatchKey::CPU, /*requires_grad=*/true));
   EXPECT_TRUE(called_nonautograd);
   EXPECT_FALSE(called_autograd);
-}
-
-TEST(OperatorRegistrationTest, whenRegisteringAutogradKernelWithCatchAllKernel_thenCanCallCatchallKernel) {
-  auto registrar = c10::RegisterOperators().op("_test::dummy(Tensor dummy) -> ()", c10::RegisterOperators::options()
-    .catchAllKernel<decltype(nonautograd_kernel), nonautograd_kernel>()
-    .kernel<decltype(autograd_kernel), &autograd_kernel>(DispatchKey::Autograd));
-
-  auto op = Dispatcher::singleton().findSchema({"_test::dummy", ""});
-  ASSERT_TRUE(op.has_value());
 
   called_nonautograd = called_autograd = false;
-  op->typed<void (Tensor)>().call(dummyTensor(DispatchKey::CPU));
+  op->typed<void(Tensor)>().call(dummyTensor(DispatchKey::CPU));
   EXPECT_TRUE(called_nonautograd);
   EXPECT_FALSE(called_autograd);
 }
@@ -591,7 +589,7 @@ TEST(OperatorRegistrationTest, AutogradBackendOverridesAutogradKernel) {
 
 void LazyBackendsAutogradOverridesAutogradKernel(DispatchKey key) {
   auto registrar = c10::RegisterOperators().op("_test::dummy(Tensor dummy) -> ()", c10::RegisterOperators::options()
-    .kernel<decltype(nonautograd_kernel), &nonautograd_kernel>(c10::getAutogradKeyFromBackend(key))
+    .kernel<decltype(nonautograd_kernel), &nonautograd_kernel>(c10::getAutogradKeyFromBackend(toBackendComponent(key)))
     .kernel<decltype(autograd_kernel), &autograd_kernel>(DispatchKey::Autograd));
 
   auto op = Dispatcher::singleton().findSchema({"_test::dummy", ""});
@@ -613,12 +611,11 @@ void LazyBackendsAutogradOverridesAutogradKernel(DispatchKey key) {
   EXPECT_FALSE(called_nonautograd);
 }
 
+// no longer test ::Lazy key here
+// since it is now registered to TS backend in-tree and thus behaves differently,
+// does not throw the expected 'could not run..' messages
 TEST(OperatorRegistrationTest, AutogradXLAOverridesAutogradKernel) {
   LazyBackendsAutogradOverridesAutogradKernel(DispatchKey::XLA);
-}
-
-TEST(OperatorRegistrationTest, AutogradLazyOverridesAutogradKernel) {
-  LazyBackendsAutogradOverridesAutogradKernel(DispatchKey::Lazy);
 }
 
 void whenRegisterWithLazyBackendsAndCatchAll_AutogradLazyBackendsIsNotFilled(DispatchKey key) {
@@ -875,7 +872,7 @@ TEST(OperatorRegistrationTest, testAvailableArgTypes) {
     "(bool a) -> bool");
   testArgTypes<std::string>::test(
     "string1", [] (const std::string& v) {EXPECT_EQ("string1", v);},
-    "string2", [] (const IValue& v) {EXPECT_EQ("string2", v.toString()->string());},
+    "string2", [] (const IValue& v) {EXPECT_EQ("string2", v.toStringRef());},
     "(str a) -> str");
   testArgTypes<Tensor>::test(
     dummyTensor(c10::DispatchKey::CPU), [] (const Tensor& v) {EXPECT_EQ(c10::DispatchKey::CPU, extractDispatchKey(v));},
@@ -884,56 +881,56 @@ TEST(OperatorRegistrationTest, testAvailableArgTypes) {
 
 
   // optional types (with has_value() == true)
-  testArgTypes<c10::optional<double>>::test(
-    c10::optional<double>(1.5), [] (const c10::optional<double>& v) {EXPECT_EQ(1.5, v.value());},
-    c10::optional<double>(2.5), [] (const IValue& v) {EXPECT_EQ(2.5, v.toDouble());},
+  testArgTypes<std::optional<double>>::test(
+    std::optional<double>(1.5), [] (const std::optional<double>& v) {EXPECT_EQ(1.5, v.value());},
+    std::optional<double>(2.5), [] (const IValue& v) {EXPECT_EQ(2.5, v.toDouble());},
     "(float? a) -> float?");
-  testArgTypes<c10::optional<int64_t>>::test(
-    c10::optional<int64_t>(1), [] (const c10::optional<int64_t>& v) {EXPECT_EQ(1, v.value());},
-    c10::optional<int64_t>(2), [] (const IValue& v) {EXPECT_EQ(2, v.toInt());},
+  testArgTypes<std::optional<int64_t>>::test(
+    std::optional<int64_t>(1), [] (const std::optional<int64_t>& v) {EXPECT_EQ(1, v.value());},
+    std::optional<int64_t>(2), [] (const IValue& v) {EXPECT_EQ(2, v.toInt());},
     "(int? a) -> int?");
-  testArgTypes<c10::optional<bool>>::test(
-    c10::optional<bool>(true), [] (const c10::optional<bool>& v) {EXPECT_EQ(true, v.value());},
-    c10::optional<bool>(false), [] (const IValue& v) {EXPECT_EQ(false, v.toBool());},
+  testArgTypes<std::optional<bool>>::test(
+    std::optional<bool>(true), [] (const std::optional<bool>& v) {EXPECT_EQ(true, v.value());},
+    std::optional<bool>(false), [] (const IValue& v) {EXPECT_EQ(false, v.toBool());},
     "(bool? a) -> bool?");
-  testArgTypes<c10::optional<bool>>::test(
-    c10::optional<bool>(false), [] (const c10::optional<bool>& v) {EXPECT_EQ(false, v.value());},
-    c10::optional<bool>(true), [] (const IValue& v) {EXPECT_EQ(true, v.toBool());},
+  testArgTypes<std::optional<bool>>::test(
+    std::optional<bool>(false), [] (const std::optional<bool>& v) {EXPECT_EQ(false, v.value());},
+    std::optional<bool>(true), [] (const IValue& v) {EXPECT_EQ(true, v.toBool());},
     "(bool? a) -> bool?");
-  testArgTypes<c10::optional<std::string>>::test(
-    c10::optional<std::string>("string1"), [] (const c10::optional<std::string>& v) {EXPECT_EQ("string1", v.value());},
-    c10::optional<std::string>("string2"), [] (const IValue& v) {EXPECT_EQ("string2", v.toString()->string());},
+  testArgTypes<std::optional<std::string>>::test(
+    std::optional<std::string>("string1"), [] (const std::optional<std::string>& v) {EXPECT_EQ("string1", v.value());},
+    std::optional<std::string>("string2"), [] (const IValue& v) {EXPECT_EQ("string2", v.toStringRef());},
     "(str? a) -> str?");
-  testArgTypes<c10::optional<Tensor>>::test(
-    c10::optional<Tensor>(dummyTensor(c10::DispatchKey::CPU)), [] (const c10::optional<Tensor>& v) {EXPECT_EQ(c10::DispatchKey::CPU, extractDispatchKey(v.value()));},
-    c10::optional<Tensor>(dummyTensor(c10::DispatchKey::CUDA)), [] (const IValue& v) {EXPECT_EQ(c10::DispatchKey::CUDA, extractDispatchKey(v.toTensor()));},
+  testArgTypes<std::optional<Tensor>>::test(
+    std::optional<Tensor>(dummyTensor(c10::DispatchKey::CPU)), [] (const std::optional<Tensor>& v) {EXPECT_EQ(c10::DispatchKey::CPU, extractDispatchKey(v.value()));},
+    std::optional<Tensor>(dummyTensor(c10::DispatchKey::CUDA)), [] (const IValue& v) {EXPECT_EQ(c10::DispatchKey::CUDA, extractDispatchKey(v.toTensor()));},
     "(Tensor? a) -> Tensor?");
 
 
   // optional types (with has_value() == false)
-  testArgTypes<c10::optional<double>>::test(
-    c10::optional<double>(c10::nullopt), [] (const c10::optional<double>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<double>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<double>>::test(
+    std::optional<double>(std::nullopt), [] (const std::optional<double>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<double>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(float? a) -> float?");
-  testArgTypes<c10::optional<int64_t>>::test(
-    c10::optional<int64_t>(c10::nullopt), [] (const c10::optional<int64_t>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<int64_t>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<int64_t>>::test(
+    std::optional<int64_t>(std::nullopt), [] (const std::optional<int64_t>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<int64_t>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(int? a) -> int?");
-  testArgTypes<c10::optional<bool>>::test(
-    c10::optional<bool>(c10::nullopt), [] (const c10::optional<bool>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<bool>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<bool>>::test(
+    std::optional<bool>(std::nullopt), [] (const std::optional<bool>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<bool>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(bool? a) -> bool?");
-  testArgTypes<c10::optional<bool>>::test(
-    c10::optional<bool>(c10::nullopt), [] (const c10::optional<bool>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<bool>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<bool>>::test(
+    std::optional<bool>(std::nullopt), [] (const std::optional<bool>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<bool>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(bool? a) -> bool?");
-  testArgTypes<c10::optional<std::string>>::test(
-    c10::optional<std::string>(c10::nullopt), [] (const c10::optional<std::string>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<std::string>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<std::string>>::test(
+    std::optional<std::string>(std::nullopt), [] (const std::optional<std::string>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<std::string>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(str? a) -> str?");
-  testArgTypes<c10::optional<Tensor>>::test(
-    c10::optional<Tensor>(c10::nullopt), [] (const c10::optional<Tensor>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<Tensor>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<Tensor>>::test(
+    std::optional<Tensor>(std::nullopt), [] (const std::optional<Tensor>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<Tensor>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(Tensor? a) -> Tensor?");
 
 
@@ -1138,33 +1135,33 @@ TEST(OperatorRegistrationTest, testAvailableArgTypes) {
     "(Tensor[] a) -> Tensor[]");
 
   // Test optional of list (with nullopt)
-  testArgTypes<c10::optional<c10::List<int64_t>>>::test(
-    c10::optional<c10::List<int64_t>>(c10::nullopt), [] (const c10::optional<c10::List<int64_t>>& v) {EXPECT_FALSE(v.has_value());},
-    c10::optional<c10::List<int64_t>>(c10::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
+  testArgTypes<std::optional<c10::List<int64_t>>>::test(
+    std::optional<c10::List<int64_t>>(std::nullopt), [] (const std::optional<c10::List<int64_t>>& v) {EXPECT_FALSE(v.has_value());},
+    std::optional<c10::List<int64_t>>(std::nullopt), [] (const IValue& v) {EXPECT_TRUE(v.isNone());},
     "(int[]? a) -> int[]?");
 
   // Test optional of list (with empty list)
-  testArgTypes<c10::optional<c10::List<int64_t>>>::test(
-    c10::optional<c10::List<int64_t>>(c10::List<int64_t>({})), [] (const c10::optional<c10::List<int64_t>>& v) {EXPECT_EQ(0, v.value().size());},
-    c10::optional<c10::List<int64_t>>(c10::List<int64_t>({})), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<int64_t>>().size());},
+  testArgTypes<std::optional<c10::List<int64_t>>>::test(
+    std::optional<c10::List<int64_t>>(c10::List<int64_t>({})), [] (const std::optional<c10::List<int64_t>>& v) {EXPECT_EQ(0, v.value().size());},
+    std::optional<c10::List<int64_t>>(c10::List<int64_t>({})), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<int64_t>>().size());},
     "(int[]? a) -> int[]?");
 
   // Test optional of list (with values)
-  testArgTypes<c10::optional<c10::List<int64_t>>>::test(
-    c10::optional<c10::List<int64_t>>(c10::List<int64_t>({1, 2})), [] (const c10::optional<c10::List<int64_t>>& v) {expectListEquals({1, 2}, v.value());},
-    c10::optional<c10::List<int64_t>>(c10::List<int64_t>({3, 4})), [] (const IValue& v) {expectListEquals({3, 4}, v.to<c10::List<int64_t>>());},
+  testArgTypes<std::optional<c10::List<int64_t>>>::test(
+    std::optional<c10::List<int64_t>>(c10::List<int64_t>({1, 2})), [] (const std::optional<c10::List<int64_t>>& v) {expectListEquals({1, 2}, v.value());},
+    std::optional<c10::List<int64_t>>(c10::List<int64_t>({3, 4})), [] (const IValue& v) {expectListEquals({3, 4}, v.to<c10::List<int64_t>>());},
     "(int[]? a) -> int[]?");
 
   // Test list of optional (with empty list)
-  testArgTypes<c10::List<c10::optional<int64_t>>>::test(
-    c10::List<c10::optional<int64_t>>(c10::List<c10::optional<int64_t>>({})), [] (const c10::List<c10::optional<int64_t>>& v) {EXPECT_EQ(0, v.size());},
-    c10::List<c10::optional<int64_t>>(c10::List<c10::optional<int64_t>>({})), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<c10::optional<int64_t>>>().size());},
+  testArgTypes<c10::List<::std::optional<int64_t>>>::test(
+    c10::List<::std::optional<int64_t>>(c10::List<::std::optional<int64_t>>({})), [] (const c10::List<::std::optional<int64_t>>& v) {EXPECT_EQ(0, v.size());},
+    c10::List<::std::optional<int64_t>>(c10::List<::std::optional<int64_t>>({})), [] (const IValue& v) {EXPECT_EQ(0, v.to<c10::List<::std::optional<int64_t>>>().size());},
     "(int?[] a) -> int?[]");
 
   // Test list of optional (with values)
-  testArgTypes<c10::List<c10::optional<int64_t>>>::test(
-    c10::List<c10::optional<int64_t>>(c10::List<c10::optional<int64_t>>({3, c10::nullopt, 2})), [] (const c10::List<c10::optional<int64_t>>& v) {expectListEquals<c10::optional<int64_t>>({3, c10::nullopt, 2}, v);},
-    c10::List<c10::optional<int64_t>>(c10::List<c10::optional<int64_t>>({3, c10::nullopt, 2})), [] (const IValue& v) {expectListEquals<c10::optional<int64_t>>({3, c10::nullopt, 2}, v.to<c10::List<c10::optional<int64_t>>>());},
+  testArgTypes<c10::List<::std::optional<int64_t>>>::test(
+    c10::List<::std::optional<int64_t>>(c10::List<::std::optional<int64_t>>({3, std::nullopt, 2})), [] (const c10::List<::std::optional<int64_t>>& v) {expectListEquals<std::optional<int64_t>>({3, std::nullopt, 2}, v);},
+    c10::List<::std::optional<int64_t>>(c10::List<::std::optional<int64_t>>({3, std::nullopt, 2})), [] (const IValue& v) {expectListEquals<std::optional<int64_t>>({3, std::nullopt, 2}, v.to<c10::List<::std::optional<int64_t>>>());},
     "(int?[] a) -> int?[]");
 
   // dict types
@@ -1236,15 +1233,15 @@ TEST(OperatorRegistrationTest, testAvailableArgTypes) {
     "(Dict(int, Tensor) a) -> Dict(int, Tensor)");
 
   // weird deeply nested type
-  using DeeplyNestedType = c10::List<c10::Dict<std::string, c10::List<c10::optional<c10::Dict<int64_t, std::string>>>>>;
+  using DeeplyNestedType = c10::List<c10::Dict<std::string, c10::List<::std::optional<c10::Dict<int64_t, std::string>>>>>;
   auto makeDeeplyNestedObject = [] () -> DeeplyNestedType {
     c10::Dict<int64_t, std::string> inner3;
     inner3.insert(1, "1");
-    c10::List<c10::optional<c10::Dict<int64_t, std::string>>> inner2;
+    c10::List<::std::optional<c10::Dict<int64_t, std::string>>> inner2;
     inner2.push_back(std::move(inner3));
-    c10::Dict<std::string, c10::List<c10::optional<c10::Dict<int64_t, std::string>>>> inner1;
+    c10::Dict<std::string, c10::List<::std::optional<c10::Dict<int64_t, std::string>>>> inner1;
     inner1.insert("key", std::move(inner2));
-    c10::List<c10::Dict<std::string, c10::List<c10::optional<c10::Dict<int64_t, std::string>>>>> result;
+    c10::List<c10::Dict<std::string, c10::List<::std::optional<c10::Dict<int64_t, std::string>>>>> result;
     result.push_back(inner1);
     return result;
   };
@@ -1791,22 +1788,22 @@ TEST(NewOperatorRegistrationTest, dispatchAutogradPrecedence) {
 
 TEST(NewOperatorRegistrationTest, throwsWhenRegisterToBackendMapsToAutogradOther) {
   // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  bool sparsecpu_called, math_called = false;
+  bool fpga_called, math_called = false;
   auto m = MAKE_TORCH_LIBRARY(test);
-  m.def("fn", torch::dispatch(c10::DispatchKey::SparseCPU, [&](const Tensor& x) { sparsecpu_called = true; return x; }));
+  m.def("fn", torch::dispatch(c10::DispatchKey::FPGA, [&](const Tensor& x) { fpga_called = true; return x; }));
   m.impl("fn", c10::DispatchKey::CompositeImplicitAutograd, [&](const Tensor& x) { math_called = true; return x; });
 
   auto op = Dispatcher::singleton().findSchema({"test::fn", ""});
   ASSERT_TRUE(op.has_value());
 
   {
-    callOp(*op, dummyTensor(c10::DispatchKey::SparseCPU));
-    ASSERT_TRUE(sparsecpu_called);
+    callOp(*op, dummyTensor(c10::DispatchKey::FPGA));
+    ASSERT_TRUE(fpga_called);
   }
 
   {
     expectThrows<c10::Error>([&] {
-      callOp(*op, dummyTensor(c10::DispatchKey::SparseCPU, /*requires_grad=*/true));
+      callOp(*op, dummyTensor(c10::DispatchKey::FPGA, /*requires_grad=*/true));
     }, "test::fn has kernels registered to both CompositeImplicitAutograd and a backend mapped to AutogradOther.");
   }
 }
@@ -1849,18 +1846,15 @@ TEST(NewOperatorRegistrationTest, dispatchMultipleTensors) {
   }
 
   {
-    // TODO(#43908): currently this will fallthrough AutogradPrivateUse1 then call catchall kernel
-    // at AutogradCPU, while backend extenders are indeed expecting to call PrivateUse1 kernel.
-    // This confusing behavior is caused by we registering fallthrough as backend fallback for
-    // Autograd keys. Note users could always work around this by registering the same kernel to
-    // AutogradPrivateUse1 as shown below until we support it.
     auto op = Dispatcher::singleton().findOp({"test::fn", ""});
     ASSERT_TRUE(op.has_value());
     catchall_called = false;
+    privateuse1_called = false;
     callOp(*op,
            dummyTensor(c10::DispatchKey::PrivateUse1, /*requires_grad=*/true),
            dummyTensor(c10::DispatchKey::CPU, /*requires_grad=*/true));
-    ASSERT_TRUE(catchall_called);
+    ASSERT_FALSE(catchall_called);
+    ASSERT_TRUE(privateuse1_called);
   }
 
   m.impl("fn", c10::DispatchKey::AutogradPrivateUse1, [&](const Tensor& x, const Tensor& y) { privateuse1_called = true; return x; });
@@ -1873,6 +1867,27 @@ TEST(NewOperatorRegistrationTest, dispatchMultipleTensors) {
            dummyTensor(c10::DispatchKey::PrivateUse1, /*requires_grad=*/true),
            dummyTensor(c10::DispatchKey::CPU, /*requires_grad=*/true));
     ASSERT_TRUE(privateuse1_called);
+  }
+}
+
+TEST(NewOperatorRegistrationTest, registerCompositeImplicitAutogradWithCPUKernel_andCallAutogradOtherKernel_callsComposite) {
+  bool math_called = false;
+  bool cpu_called = false;
+  auto m = MAKE_TORCH_LIBRARY(test);
+  m.def("fn(Tensor dummy) -> Tensor");
+  m.impl("fn", c10::DispatchKey::CPU, [&](const Tensor& x) { cpu_called = true; return x; });
+  m.impl("fn", c10::DispatchKey::CompositeImplicitAutograd, [&](const Tensor& x) { math_called = true; return x; });
+
+  auto op = Dispatcher::singleton().findSchema({"test::fn", ""});
+  ASSERT_TRUE(op.has_value());
+
+  {
+    math_called = cpu_called = false;
+    // Meta should redispatch to the AutogradOther backend,
+    // which the composite kernel should be registered to.
+    callOp(*op, dummyTensor(c10::DispatchKey::Meta, /*requires_grad=*/true));
+    ASSERT_TRUE(math_called);
+    ASSERT_FALSE(cpu_called);
   }
 }
 
@@ -1921,7 +1936,7 @@ TEST(NewOperatorRegistrationTest, fallback) {
   auto op = Dispatcher::singleton().findSchema({"_test::dummy", ""});
   ASSERT_TRUE(op.has_value());
   auto stack = callOp(*op, dummyTensor(c10::DispatchKey::CPU), "hello ");
-  EXPECT_EQ("hello _test::dummy", stack[1].toString()->string());
+  EXPECT_EQ("hello _test::dummy", stack[1].toStringRef());
 }
 
 TEST(NewOperatorRegistrationTest, BackendSelectRedispatchesToCPU) {
@@ -2126,7 +2141,7 @@ TEST(OperatorRegistrationTest, callKernelsWithDispatchKeySetConvention_mixedCall
 
 TEST(OperatorRegistrationTest, getRegistrationsForDispatchKey) {
   // should return every registered op
-  auto all_ops = Dispatcher::singleton().getRegistrationsForDispatchKey(c10::nullopt);
+  auto all_ops = Dispatcher::singleton().getRegistrationsForDispatchKey(std::nullopt);
   // should return every registered op with a cpu kernel
   auto cpu_ops = Dispatcher::singleton().getRegistrationsForDispatchKey(c10::DispatchKey::CPU);
   ASSERT_TRUE(all_ops.size() > 0);
@@ -2139,6 +2154,70 @@ TEST(OperatorRegistrationTest, getRegistrationsForDispatchKey) {
   std::sort(all_ops.begin(), all_ops.end(), cmp_lambda);
   std::sort(cpu_ops.begin(), cpu_ops.end(), cmp_lambda);
   ASSERT_TRUE(std::includes(all_ops.begin(), all_ops.end(), cpu_ops.begin(), cpu_ops.end(), cmp_lambda));
+}
+
+Tensor symint_op(const Tensor& self, int64_t length) {
+  return self.clone();
+}
+
+TEST(OperatorRegistrationTest, TestSymNonSymCompatibility) {
+  auto m = MAKE_TORCH_LIBRARY(_test);
+  m.def("_test::symint_op(Tensor self, SymInt length) -> Tensor");
+  auto m_cpu = MAKE_TORCH_LIBRARY_IMPL(_test, CPU);
+  m_cpu.impl("symint_op", c10::DispatchKey::CPU, TORCH_FN(symint_op));
+
+  auto opHandle = c10::Dispatcher::singleton().findSchemaOrThrow(
+      "_test::symint_op", "");
+
+  opHandle.typed<Tensor(const Tensor&, int64_t)>().call(dummyTensor(c10::DispatchKey::CPU), 4);
+  opHandle.typed<Tensor(const Tensor&, c10::SymInt)>().call(dummyTensor(c10::DispatchKey::CPU), c10::SymInt(4));
+
+  expectThrows<c10::Error>([&] {
+    opHandle.typed<Tensor(const Tensor&, const c10::SymInt&)>().call(dummyTensor(c10::DispatchKey::CPU), c10::SymInt(4));
+  }, "Tried to access or call an operator with a wrong signature");
+}
+
+Tensor symint_op2(const Tensor& self, c10::SymInt length) {
+  return self.clone();
+}
+
+TEST(OperatorRegistrationTest, TestSymSymCompatibility) {
+  auto m = MAKE_TORCH_LIBRARY(_test);
+  m.def("_test::symint_op(Tensor self, SymInt length) -> Tensor");
+  auto m_cpu = MAKE_TORCH_LIBRARY_IMPL(_test, CPU);
+  m_cpu.impl("symint_op", c10::DispatchKey::CPU, TORCH_FN(symint_op2));
+
+  auto opHandle = c10::Dispatcher::singleton().findSchemaOrThrow(
+      "_test::symint_op", "");
+
+  opHandle.typed<Tensor(const Tensor&, int64_t)>().call(dummyTensor(c10::DispatchKey::CPU), 4);
+  opHandle.typed<Tensor(const Tensor&, c10::SymInt)>().call(dummyTensor(c10::DispatchKey::CPU), c10::SymInt(4));
+  // TODO: We should reject this on principle, but today it accidentally works
+  // due to going through the boxed calling convention.
+  //
+  // First, we attempt to test if const SymInt& has SymInt. It does not,
+  // because we only accept something as SymInt if it has exactly SymInt in
+  // its signature. So we check if there is a non-symint kernel. But there is
+  // no non-SymInt kernel, because we only registered a real SymInt kernel.
+  // When this occurs, we fall back to the boxed calling convention.  And the
+  // boxed calling convention can deal with const SymInt& fine, as during
+  // boxing it will just create a SymInt to push onto the argument stack and
+  // everything is fine.
+  opHandle.typed<Tensor(const Tensor&, const c10::SymInt&)>().call(dummyTensor(c10::DispatchKey::CPU), c10::SymInt(4));
+}
+
+Tensor symint_op3(const Tensor& self, const c10::SymInt& length) {
+  return self.clone();
+}
+
+TEST(OperatorRegistrationTest, TestSymSymRefCompatibility) {
+  auto m = MAKE_TORCH_LIBRARY(_test);
+  m.def("_test::symint_op(Tensor self, SymInt length) -> Tensor");
+  auto m_cpu = MAKE_TORCH_LIBRARY_IMPL(_test, CPU);
+
+  expectThrows<c10::Error>([&] {
+    m_cpu.impl("symint_op", c10::DispatchKey::CPU, TORCH_FN(symint_op3));
+  }, "doesn't match the expected function schema");
 }
 
 }

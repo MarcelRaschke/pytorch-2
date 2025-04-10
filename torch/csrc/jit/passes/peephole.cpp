@@ -12,24 +12,21 @@
 #include <torch/csrc/jit/passes/peephole_list_idioms.h>
 #include <torch/csrc/jit/passes/peephole_non_tensor.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
-#include <torch/csrc/utils/memory.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // Conservatively compare two optionals. If both are undefined, assume
 // they aren't equal
 template <typename T>
-static bool mustBeEqual(const c10::optional<T>& a, const c10::optional<T>& b) {
+static bool mustBeEqual(const std::optional<T>& a, const std::optional<T>& b) {
   return a == b && a.has_value();
 }
 
 struct PeepholeOptimizeImpl {
   PeepholeOptimizeImpl(
-      // NOLINTNEXTLINE(modernize-pass-by-value)
-      const std::shared_ptr<Graph>& graph,
+      std::shared_ptr<Graph> graph,
       bool disable_shape_peepholes)
-      : graph_(graph), shape_peepholes_(!disable_shape_peepholes) {}
+      : graph_(std::move(graph)), shape_peepholes_(!disable_shape_peepholes) {}
 
   bool run() {
     bool changed = optimizeBlock(graph_->block());
@@ -186,14 +183,14 @@ struct PeepholeOptimizeImpl {
           shape_peepholes_) {
         if (auto ptt = node->inputs().at(0)->type()->cast<TensorType>()) {
           if (auto maybe_ndim = ptt->sizes().size()) {
-            auto ndim = *maybe_ndim;
+            auto ndim = static_cast<int64_t>(*maybe_ndim);
             auto maybe_index = toIValue(node->inputs().at(1));
             if (!maybe_index) {
               continue;
             }
             int64_t index = maybe_index->toInt();
             int64_t norm_index = index < 0 ? ndim + index : index;
-            if (norm_index >= 0 && norm_index < static_cast<int64_t>(ndim) &&
+            if (norm_index >= 0 && norm_index < ndim &&
                 ptt->sizes()[norm_index]) {
               WithInsertPoint guard(node);
               IValue ival(*ptt->sizes()[norm_index]);
@@ -270,6 +267,28 @@ struct PeepholeOptimizeImpl {
           changed = true;
         }
       } else if (
+          node->matches("aten::device(str type, int index) -> Device") &&
+          shape_peepholes_) {
+        auto string_type = node->inputs().at(0)->type()->expect<StringType>();
+        if (string_type) {
+          WithInsertPoint guard(node);
+          std::string type_str = node->inputs().at(0)->node()->s(attr::value);
+          auto maybe_index = toIValue(node->inputs().at(1));
+          int64_t index = 0;
+          if (maybe_index) {
+            index = maybe_index->toInt();
+          }
+          auto device = c10::Device(type_str + ":" + std::to_string(index));
+          auto output = node->owningGraph()->insertConstant(device);
+          GRAPH_UPDATE(
+              "Replacing ",
+              getHeader(node),
+              " with a device constant ",
+              output->debugName());
+          node->output()->replaceAllUsesWith(output);
+          changed = true;
+        }
+      } else if (
           node->matches("aten::dim(Tensor self) -> int") && shape_peepholes_) {
         auto ptt = node->input()->type()->expect<TensorType>();
         if (auto dim = ptt->sizes().size()) {
@@ -310,7 +329,7 @@ struct PeepholeOptimizeImpl {
   bool shape_peepholes_;
 };
 
-bool FuseAddMM(Block* block) {
+static bool FuseAddMM(Block* block) {
   bool changed = false;
   for (Node* node : block->nodes()) {
     // XXX: remember that if you want to simplify an expression by combining
@@ -447,5 +466,4 @@ bool PeepholeOptimize(
   return changed;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

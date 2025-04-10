@@ -1,3 +1,5 @@
+# mypy: allow-untyped-defs
+
 import torch.distributed.rpc as rpc
 import torch.distributed.rpc._testing  # noqa: F401
 from torch.testing._internal.distributed.rpc.rpc_agent_test_fixture import (
@@ -13,7 +15,7 @@ retryable_message_types = ["RREF_FORK_REQUEST",
                            "CLEANUP_AUTOGRAD_CONTEXT_REQ"]
 
 # The following messages incur the corresponding delay in seconds while being
-# processed in FaultyProcessGroupAgent's enqueueSend() function.
+# processed in FaultyTensorPipeAgent's enqueueSend() function.
 default_messages_to_delay = {
     "PYTHON_CALL": 1.5,  # Python UDF
     "SCRIPT_CALL": 1.5,  # Script/Builtin
@@ -54,7 +56,7 @@ class FaultyRpcAgentTestFixture(RpcAgentTestFixture):
             "Connection reset by peer",
             "Connection closed by peer"
         ]
-        return "|".join(["({})".format(error_str) for error_str in error_regexes])
+        return "|".join([f"({error_str})" for error_str in error_regexes])
 
     def get_timeout_error_regex(self):
         return "RPC ran for more than"

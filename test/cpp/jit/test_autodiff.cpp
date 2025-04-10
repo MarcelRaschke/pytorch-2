@@ -169,8 +169,7 @@ TEST(AutodiffTest, ADFormulas) {
     // Get outputs from the interpreter
     auto tensors_in = fmap(vars_in, cast);
     auto tensor_grads_in = fmap(var_grads_in, cast);
-    tensor_list tensors_out, tensor_grads_out;
-    std::tie(tensors_out, tensor_grads_out) =
+    auto [tensors_out, tensor_grads_out] =
         runGradient(grad_spec, tensors_in, tensor_grads_in);
 
     // Compare results
@@ -289,14 +288,11 @@ class AutodiffRemoveUnusedGradientsTest : public ::testing::Test {
   void SetUp() override {
     prev_exec = getExecutorMode();
     getExecutorMode() = true;
-    prev_profiling = getProfilingMode();
-    getProfilingMode() = true;
     prev_inline_autodiff = getAutodiffSubgraphInlining();
     debugSetAutodiffSubgraphInlining(false);
   }
   void TearDown() override {
     getExecutorMode() = prev_exec;
-    getProfilingMode() = prev_profiling;
     debugSetAutodiffSubgraphInlining(prev_inline_autodiff);
   }
 

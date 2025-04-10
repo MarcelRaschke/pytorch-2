@@ -1,16 +1,15 @@
 #pragma once
 
-#include <ATen/core/Array.h>
 #include <ATen/core/TransformationHelper.h>
 #include <c10/util/Half.h>
 #include <c10/util/BFloat16.h>
 #include <c10/util/MathConstants.h>
-#include <c10/util/Optional.h>
 #include <c10/macros/Macros.h>
 
-#include <type_traits>
-#include <limits>
 #include <cmath>
+#include <limits>
+#include <optional>
+#include <type_traits>
 
 /**
  * Distributions kernel adapted from THRandom.cpp
@@ -37,18 +36,19 @@ namespace {
 template <typename T>
 struct uniform_int_from_to_distribution {
 
-  C10_HOST_DEVICE inline uniform_int_from_to_distribution(uint64_t range, int64_t base) {
-    range_ = range;
-    base_ = base;
-  }
+  C10_HOST_DEVICE inline uniform_int_from_to_distribution(uint64_t range, int64_t base) : range_(range), base_(base) {}
 
   template <typename RNG>
   C10_HOST_DEVICE inline T operator()(RNG generator) {
+#ifdef FBCODE_CAFFE2
     if ((
-      std::is_same<T, int64_t>::value ||
-      std::is_same<T, double>::value ||
-      std::is_same<T, float>::value ||
-      std::is_same<T, at::BFloat16>::value) && range_ >= 1ULL << 32)
+      std::is_same_v<T, int64_t> ||
+      std::is_same_v<T, double> ||
+      std::is_same_v<T, float> ||
+      std::is_same_v<T, at::BFloat16>) && range_ >= 1ULL << 32)
+#else
+    if (range_ >= 1ULL << 28) // allow approx 5% skew in uniform int generation using %
+#endif
     {
       return transformation::uniform_int_from_to<T>(generator->random64(), range_, base_);
     } else {
@@ -83,7 +83,7 @@ struct uniform_int_distribution {
 
   template <typename RNG>
   C10_HOST_DEVICE inline T operator()(RNG generator) {
-    if (std::is_same<T, double>::value || std::is_same<T, int64_t>::value) {
+    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, int64_t>) {
       return transformation::uniform_int<T>(generator->random64());
     } else {
       return transformation::uniform_int<T>(generator->random());
@@ -98,16 +98,14 @@ struct uniform_int_distribution {
 template <typename T>
 struct uniform_real_distribution {
 
-  C10_HOST_DEVICE inline uniform_real_distribution(T from, T to) {
+  C10_HOST_DEVICE inline uniform_real_distribution(T from, T to) : from_(from), to_(to) {
     TORCH_CHECK_IF_NOT_ON_CUDA(from <= to);
     TORCH_CHECK_IF_NOT_ON_CUDA(to - from <= std::numeric_limits<T>::max());
-    from_ = from;
-    to_ = to;
   }
 
   template <typename RNG>
   C10_HOST_DEVICE inline dist_acctype<T> operator()(RNG generator){
-    if(std::is_same<T, double>::value) {
+    if constexpr (std::is_same_v<T, double>) {
       return transformation::uniform_real<T>(generator->random64(), from_, to_);
     } else {
       return transformation::uniform_real<T>(generator->random(), from_, to_);
@@ -147,7 +145,7 @@ template <typename RNG, typename ret_type,                                      
 C10_HOST_DEVICE inline bool maybe_get_next_##TYPE##_normal_sample(RNG* generator, ret_type* ret) {  \
   if (generator->next_##TYPE##_normal_sample()) {                                                   \
     *ret = *(generator->next_##TYPE##_normal_sample());                                             \
-    generator->set_next_##TYPE##_normal_sample(c10::optional<TYPE>());                              \
+    generator->set_next_##TYPE##_normal_sample(std::optional<TYPE>());                              \
     return true;                                                                                    \
   }                                                                                                 \
   return false;                                                                                     \
@@ -177,8 +175,8 @@ template <typename RNG, typename ret_type,                                      
 C10_HOST_DEVICE inline void maybe_set_next_##TYPE##_normal_sample(RNG* /*generator*/, ret_type /*cache*/) { \
 }
 
-DISTRIBUTION_HELPER_GENERATE_NEXT_NORMAL_METHODS(double);
-DISTRIBUTION_HELPER_GENERATE_NEXT_NORMAL_METHODS(float);
+DISTRIBUTION_HELPER_GENERATE_NEXT_NORMAL_METHODS(double)
+DISTRIBUTION_HELPER_GENERATE_NEXT_NORMAL_METHODS(float)
 
 /**
  * Samples a normal distribution using the Box-Muller method
@@ -189,17 +187,15 @@ DISTRIBUTION_HELPER_GENERATE_NEXT_NORMAL_METHODS(float);
 template <typename T>
 struct normal_distribution {
 
-  C10_HOST_DEVICE inline normal_distribution(T mean_in, T stdv_in) {
+  C10_HOST_DEVICE inline normal_distribution(T mean_in, T stdv_in) : mean(mean_in), stdv(stdv_in) {
     TORCH_CHECK_IF_NOT_ON_CUDA(stdv_in >= 0, "stdv_in must be positive: ", stdv_in);
-    mean = mean_in;
-    stdv = stdv_in;
   }
 
   template <typename RNG>
   C10_HOST_DEVICE inline dist_acctype<T> operator()(RNG generator){
     dist_acctype<T> ret;
     // return cached values if available
-    if (std::is_same<T, double>::value) {
+    if constexpr (std::is_same_v<T, double>) {
       if (maybe_get_next_double_normal_sample(generator, &ret)) {
         return transformation::normal(ret, mean, stdv);
       }
@@ -212,9 +208,9 @@ struct normal_distribution {
     uniform_real_distribution<T> uniform(0.0, 1.0);
     const dist_acctype<T> u1 = uniform(generator);
     const dist_acctype<T> u2 = uniform(generator);
-    const dist_acctype<T> r = ::sqrt(static_cast<T>(-2.0) * ::log(static_cast<T>(1.0)-u2));
+    const dist_acctype<T> r = ::sqrt(static_cast<T>(-2.0) * ::log1p(-u2));
     const dist_acctype<T> theta = static_cast<T>(2.0) * c10::pi<T> * u1;
-    if (std::is_same<T, double>::value) {
+    if constexpr (std::is_same_v<T, double>) {
       maybe_set_next_double_normal_sample(generator, r * ::sin(theta));
     } else {
       maybe_set_next_float_normal_sample(generator, r * ::sin(theta));
@@ -239,9 +235,8 @@ template <> struct DiscreteDistributionType<double> { using type = double; };
 template <typename T>
 struct bernoulli_distribution {
 
-  C10_HOST_DEVICE inline bernoulli_distribution(T p_in) {
+  C10_HOST_DEVICE inline bernoulli_distribution(T p_in) : p(p_in) {
     TORCH_CHECK_IF_NOT_ON_CUDA(p_in >= 0 && p_in <= 1);
-    p = p_in;
   }
 
   template <typename RNG>
@@ -260,9 +255,8 @@ struct bernoulli_distribution {
 template <typename T>
 struct geometric_distribution {
 
-  C10_HOST_DEVICE inline geometric_distribution(T p_in) {
+  C10_HOST_DEVICE inline geometric_distribution(T p_in) : p(p_in) {
     TORCH_CHECK_IF_NOT_ON_CUDA(p_in > 0 && p_in < 1);
-    p = p_in;
   }
 
   template <typename RNG>
@@ -281,9 +275,7 @@ struct geometric_distribution {
 template <typename T>
 struct exponential_distribution {
 
-  C10_HOST_DEVICE inline exponential_distribution(T lambda_in) {
-    lambda = lambda_in;
-  }
+  C10_HOST_DEVICE inline exponential_distribution(T lambda_in) : lambda(lambda_in) {}
 
   template <typename RNG>
   C10_HOST_DEVICE inline T operator()(RNG generator) {
@@ -301,10 +293,7 @@ struct exponential_distribution {
 template <typename T>
 struct cauchy_distribution {
 
-  C10_HOST_DEVICE inline cauchy_distribution(T median_in, T sigma_in) {
-    median = median_in;
-    sigma = sigma_in;
-  }
+  C10_HOST_DEVICE inline cauchy_distribution(T median_in, T sigma_in) : median(median_in), sigma(sigma_in) {}
 
   template <typename RNG>
   C10_HOST_DEVICE inline T operator()(RNG generator) {
@@ -325,10 +314,8 @@ struct cauchy_distribution {
 template <typename T>
 struct lognormal_distribution {
 
-  C10_HOST_DEVICE inline lognormal_distribution(T mean_in, T stdv_in) {
+  C10_HOST_DEVICE inline lognormal_distribution(T mean_in, T stdv_in) : mean(mean_in), stdv(stdv_in) {
     TORCH_CHECK_IF_NOT_ON_CUDA(stdv_in > 0);
-    mean = mean_in;
-    stdv = stdv_in;
   }
 
   template<typename RNG>

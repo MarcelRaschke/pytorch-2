@@ -3,22 +3,20 @@
 #include <c10/core/Device.h>
 #include <c10/util/Exception.h>
 #include <c10/util/StringUtil.h>
-#include <torch/csrc/lazy/core/tensor.h>
 #include <torch/csrc/lazy/backend/backend_interface.h>
+#include <torch/csrc/lazy/core/tensor.h>
+#include <optional>
 
-namespace torch {
-namespace lazy {
+namespace torch::lazy {
 
-// TODO(alanwaketan): Use the backend API to get the default device type.
-// In the future, we should also get the default device ordinal.
 BackendDevice::BackendDevice()
-  : type_(std::make_shared<BackendDeviceType>()) {}
+    : type_(getBackend()->GetDefaultDeviceType()),
+      ordinal_(getBackend()->GetDefaultDeviceOrdinal()) {}
 
-BackendDevice::BackendDevice(std::shared_ptr<BackendDeviceType>&& type, int64_t ordinal)
-  : type_(std::move(type)), ordinal_(ordinal) {}
-
-BackendDevice::BackendDevice(const std::string& device_spec)
-  : BackendDevice::BackendDevice() {}
+BackendDevice::BackendDevice(
+    std::shared_ptr<BackendDeviceType>&& type,
+    int64_t ordinal)
+    : type_(std::move(type)), ordinal_(ordinal) {}
 
 int8_t BackendDevice::type() const {
   TORCH_INTERNAL_ASSERT(type_);
@@ -42,28 +40,50 @@ std::ostream& operator<<(std::ostream& os, const BackendDevice& device) {
   return os;
 }
 
-// TODO(whc) refactor this: we need to support non-zero default ordinal for torch/XLA.
 BackendDevice atenDeviceToBackendDevice(const c10::Device& device) {
   TORCH_CHECK(device.type() == at::kLazy, device);
-  int64_t ordinal = device.has_index() ? device.index() : 0;
+  int64_t ordinal = device.has_index()
+      ? device.index()
+      : getBackend()->GetDefaultDeviceOrdinal();
   return BackendDevice(getBackend()->GetDefaultDeviceType(), ordinal);
 }
 
 // TODO(whc) refactor this: we need to support non 1 on 1 mapping for torch/XLA.
 c10::Device backendDeviceToAtenDevice(const BackendDevice& device) {
-  return c10::Device(at::kLazy, device.ordinal());
+  return c10::Device(
+      at::kLazy, static_cast<c10::DeviceIndex>(device.ordinal()));
 }
 
-c10::optional<BackendDevice> GetBackendDevice(const at::Tensor& tensor) {
+std::optional<BackendDevice> GetBackendDevice(at::ITensorListRef tensors) {
+  for (auto& tensor : tensors) {
+    if (auto lt = TryGetLtcTensor(tensor)) {
+      return lt->GetDevice();
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<BackendDevice> GetBackendDevice(at::TensorList tensors) {
+  return GetBackendDevice(at::ITensorListRef(tensors));
+}
+
+std::optional<BackendDevice> GetBackendDevice(const at::Tensor& tensor) {
   if (auto lt = TryGetLtcTensor(tensor)) {
     return lt->GetDevice();
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
-c10::optional<BackendDevice> GetBackendDevice() {
-  return c10::nullopt;
+std::optional<BackendDevice> GetBackendDevice(
+    const std::optional<c10::Device>& device) {
+  if (device) {
+    return atenDeviceToBackendDevice(*device);
+  }
+  return std::nullopt;
 }
 
-}  // namespace lazy
-}  // namespace torch
+std::optional<BackendDevice> GetBackendDevice() {
+  return std::nullopt;
+}
+
+} // namespace torch::lazy

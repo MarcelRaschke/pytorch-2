@@ -1,6 +1,7 @@
 def define_targets(rules):
     rules.cc_library(
         name = "c10",
+        visibility = ["//visibility:public"],
         deps = [
             "//c10/core:CPUAllocator",
             "//c10/core:ScalarType",
@@ -15,10 +16,21 @@ def define_targets(rules):
             "//c10/util:typeid",
         ] + rules.if_cuda(
             [
-                "//c10/cuda",
+                "//c10/cuda:cuda",
                 "//c10/cuda:Macros",
             ],
             [],
         ),
+    )
+
+    rules.cc_library(
+        name = "c10_headers",
+        deps = [
+            "//c10/core:base_headers",
+            "//c10/macros",
+            "//c10/util:base_headers",
+            "//c10/util:bit_cast",
+            "//c10/util:ssize",
+        ],
         visibility = ["//visibility:public"],
     )

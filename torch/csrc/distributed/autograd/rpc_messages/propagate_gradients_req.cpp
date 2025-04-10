@@ -4,9 +4,7 @@
 
 #include <c10/util/irange.h>
 
-namespace torch {
-namespace distributed {
-namespace autograd {
+namespace torch::distributed::autograd {
 
 using rpc::Message;
 using rpc::MessageType;
@@ -23,6 +21,7 @@ PropagateGradientsReq::PropagateGradientsReq(
 c10::intrusive_ptr<Message> PropagateGradientsReq::toMessageImpl() && {
   std::vector<at::IValue> ivalues;
   // Add all the grad tensors.
+  ivalues.reserve(grads_.size() + 3);
   for (const auto& grad : grads_) {
     ivalues.emplace_back(grad);
   }
@@ -64,21 +63,19 @@ std::unique_ptr<PropagateGradientsReq> PropagateGradientsReq::fromMessage(
   bool retainGraph = tupleElements.back().toBool();
 
   // Build AutogradMetadata.
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  int64_t autogradContextId, autogradMessageId;
-  autogradMessageId = tupleElements[tupleElements.size() - 2].toInt();
-  autogradContextId = tupleElements[tupleElements.size() - 3].toInt();
+  int64_t autogradMessageId = tupleElements[tupleElements.size() - 2].toInt();
+  int64_t autogradContextId = tupleElements[tupleElements.size() - 3].toInt();
 
   AutogradMetadata autogradMetadata(autogradContextId, autogradMessageId);
 
   // Retrieve the gradient tensors.
   std::vector<Variable> grads(tupleElements.size() - 3);
-  for(const auto i : c10::irange(tupleElements.size() - 3)) {
+  for (const auto i : c10::irange(tupleElements.size() - 3)) {
     grads[i] = tupleElements[i].toTensor();
   }
 
   return std::make_unique<PropagateGradientsReq>(
-    autogradMetadata, grads, retainGraph);
+      autogradMetadata, grads, retainGraph);
 }
 
 const AutogradMetadata& PropagateGradientsReq::getAutogradMetadata() {
@@ -94,6 +91,4 @@ bool PropagateGradientsReq::retainGraph() {
   return retainGraph_;
 }
 
-} // namespace autograd
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::autograd

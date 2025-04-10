@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <c10/util/irange.h>
 #include <tensorpipe/common/cpu_buffer.h>
 #include <tensorpipe/core/message.h>
-#include <c10/util/irange.h>
 #include <torch/csrc/distributed/rpc/tensorpipe_utils.h>
 #include <torch/torch.h>
 
@@ -20,12 +20,11 @@ TEST(TensorpipeSerialize, Base) {
   torch::distributed::rpc::MessageType mtype =
       torch::distributed::rpc::MessageType::UNKNOWN;
   int64_t mId = 100;
-  auto sendingRpcMessage = c10::make_intrusive<torch::distributed::rpc::Message>(
-      std::move(payload), std::move(tensors), mtype);
+  auto sendingRpcMessage =
+      c10::make_intrusive<torch::distributed::rpc::Message>(
+          std::move(payload), std::move(tensors), mtype);
   sendingRpcMessage->setId(mId);
-  tensorpipe::Message sendingTpMessage;
-  torch::distributed::rpc::TensorpipeWriteBuffers sendingTpBuffers;
-  std::tie(sendingTpMessage, sendingTpBuffers) =
+  auto [sendingTpMessage, sendingTpBuffers] =
       torch::distributed::rpc::tensorpipeSerialize(
           std::move(sendingRpcMessage), {}, {});
 
@@ -57,9 +56,7 @@ TEST(TensorpipeSerialize, Base) {
   // Mimic readDescriptor() callback:
   // - Allocate buffers
   // - Fill pointers in tensorpipe message
-  tensorpipe::Allocation recvingTpAllocation;
-  torch::distributed::rpc::TensorpipeReadBuffers recvingTpBuffers;
-  std::tie(recvingTpAllocation, recvingTpBuffers) =
+  auto [recvingTpAllocation, recvingTpBuffers] =
       torch::distributed::rpc::tensorpipeAllocate(recvingTpDescriptor, {});
 
   // Mimic tensorpipe data transfer
@@ -71,7 +68,7 @@ TEST(TensorpipeSerialize, Base) {
         recvingTpAllocation.payloads[i];
     if (srcPayload.length) {
       // Empty vector's data() can return nullptr, use the length to avoid
-      // coying into nullptr
+      // copying into nullptr
       memcpy(dstPayload.data, srcPayload.data, srcPayload.length);
     }
   }
@@ -90,8 +87,7 @@ TEST(TensorpipeSerialize, Base) {
   // - Unpickle
   c10::intrusive_ptr<torch::distributed::rpc::Message> recvingRpcMessage =
       torch::distributed::rpc::tensorpipeDeserialize(
-          std::move(recvingTpDescriptor),
-          std::move(recvingTpBuffers));
+          std::move(recvingTpDescriptor), std::move(recvingTpBuffers));
 
   // Data is ready
   EXPECT_EQ(mtype, recvingRpcMessage->type());
@@ -113,12 +109,11 @@ TEST(TensorpipeSerialize, RecopySparseTensors) {
   std::vector<char> payload = {'1', '2', '3'};
   torch::distributed::rpc::MessageType mtype =
       torch::distributed::rpc::MessageType::UNKNOWN;
-  auto sendingRpcMessage = c10::make_intrusive<torch::distributed::rpc::Message>(
-      std::move(payload), std::move(tensors), mtype);
+  auto sendingRpcMessage =
+      c10::make_intrusive<torch::distributed::rpc::Message>(
+          std::move(payload), std::move(tensors), mtype);
 
-  tensorpipe::Message sendingTpMessage;
-  torch::distributed::rpc::TensorpipeWriteBuffers tpBuffers;
-  std::tie(sendingTpMessage, tpBuffers) =
+  auto [sendingTpMessage, tpBuffers] =
       torch::distributed::rpc::tensorpipeSerialize(
           std::move(sendingRpcMessage), {}, {});
 
@@ -145,12 +140,11 @@ TEST(TensorpipeSerialize, NoDeleterTensors) {
   std::vector<char> payload = {'1', '2', '3'};
   torch::distributed::rpc::MessageType mtype =
       torch::distributed::rpc::MessageType::UNKNOWN;
-  auto sendingRpcMessage = c10::make_intrusive<torch::distributed::rpc::Message>(
-      std::move(payload), std::move(tensors), mtype);
+  auto sendingRpcMessage =
+      c10::make_intrusive<torch::distributed::rpc::Message>(
+          std::move(payload), std::move(tensors), mtype);
 
-  tensorpipe::Message sendingTpMessage;
-  torch::distributed::rpc::TensorpipeWriteBuffers tpBuffers;
-  std::tie(sendingTpMessage, tpBuffers) =
+  auto [sendingTpMessage, tpBuffers] =
       torch::distributed::rpc::tensorpipeSerialize(
           std::move(sendingRpcMessage), {}, {});
 

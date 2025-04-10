@@ -12,7 +12,6 @@ include(GNUInstallDirs)
 project(PYTORCH_QNNPACK C CXX ASM)
 
 # ---[ Options.
-option(PYTORCH_QNNPACK_CUSTOM_THREADPOOL "Build QNNPACK for custom thread pool" OFF)
 set(PYTORCH_QNNPACK_LIBRARY_TYPE "default" CACHE STRING "Type of library (shared, static, or default) to build")
 set_property(CACHE PYTORCH_QNNPACK_LIBRARY_TYPE PROPERTY STRINGS default static shared)
 option(PYTORCH_QNNPACK_BUILD_TESTS "Build QNNPACK unit tests" ON)
@@ -174,8 +173,8 @@ set(PYTORCH_QNNPACK_EXEC_SRCS
   src/conv-run.cc
   src/deconv-run.cc
   src/fc-run.cc
+  src/fc-unpack.cc
   src/fc-dynamic-run.cc
-  src/pack_block_sparse.cc
   src/indirection.c
   src/operator-run.c)
 
@@ -373,13 +372,7 @@ elseif(NOT TARGET pthreadpool AND USE_SYSTEM_PTHREADPOOL)
     IMPORTED_LOCATION "${PTHREADPOOL_LIBRARY}")
   add_library(pthreadpool_interface INTERFACE)
 endif()
-if(PYTORCH_QNNPACK_CUSTOM_THREADPOOL)
-  # Depend on pthreadpool interface, but not on implementation.
-  # This is used when QNNPACK user (e.g. Caffe2) provides its own threadpool implementation.
-  target_link_libraries(pytorch_qnnpack PUBLIC pthreadpool_interface)
-else()
-  target_link_libraries(pytorch_qnnpack PUBLIC pthreadpool)
-endif()
+target_link_libraries(pytorch_qnnpack PUBLIC pthreadpool)
 
 # ---[ Configure FXdiv
 if(NOT TARGET fxdiv AND NOT USE_SYSTEM_FXDIV)
@@ -397,6 +390,12 @@ elseif(NOT TARGET fxdiv AND USE_SYSTEM_FXDIV)
   set_property(TARGET fxdiv PROPERTY LINKER_LANGUAGE C)
 endif()
 target_link_libraries(pytorch_qnnpack PRIVATE fxdiv)
+
+# -- [ CMake-4 compat mode
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0.0" AND NOT (USE_SYSTEM_PSIMD OR USE_SYSTEM_FP16))
+  message(WARNING "Ancient psimd/FP16 forces CMake compatibility")
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
 
 # ---[ Configure psimd
 if(NOT TARGET psimd AND NOT USE_SYSTEM_PSIMD)
@@ -429,6 +428,11 @@ elseif(NOT TARGET fp16 AND USE_SYSTEM_FP16)
   set_target_properties(fp16 PROPERTIES LINKER_LANGUAGE C)
 endif()
 target_link_libraries(pytorch_qnnpack PRIVATE fp16)
+
+# -- [ Undo cmake-4 compat mode
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0.0")
+  unset(CMAKE_POLICY_VERSION_MINIMUM)
+endif()
 
 install(TARGETS pytorch_qnnpack
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

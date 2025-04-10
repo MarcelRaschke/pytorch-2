@@ -1,6 +1,7 @@
 #include <torch/csrc/jit/serialization/export_bytecode.h>
 #include <utility>
 
+#include <torch/csrc/jit/operator_upgraders/version_map.h>
 #include <torch/csrc/jit/runtime/instruction.h>
 #include <torch/csrc/jit/serialization/export.h>
 
@@ -29,10 +30,9 @@
 
 #include <caffe2/serialize/inline_container.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
-std::vector<Method> gatherGetSetStates(ObjectPtr obj) {
+static std::vector<Method> gatherGetSetStates(const ObjectPtr& obj) {
   std::vector<Method> methods;
   // Use DFS on IValue's to traverse dependencies of module._ivalue and
   // add all setstate/getstates to initial stack.
@@ -63,11 +63,11 @@ std::vector<Method> gatherGetSetStates(ObjectPtr obj) {
   return methods;
 }
 
-std::vector<Method> findAllDependentFunctions(
+static std::vector<Method> findAllDependentFunctions(
     const Module& module,
     Graph& graph) {
   std::vector<Method> methods;
-  std::unordered_set<c10::string_view> called_method_names;
+  std::unordered_set<std::string_view> called_method_names;
   auto nodes = findAllNodes(graph, c10::prim::CallMethod, true);
   for (Node* node : nodes) {
     if (auto iface = node->input(0)->type()->castRaw<InterfaceType>()) {
@@ -92,7 +92,7 @@ std::vector<Method> findAllDependentFunctions(
 // 2. All the dependent functions will come afterwards.
 // This order is meaningful because currently mobile Module looks up
 // methods with linear search.
-std::vector<std::unique_ptr<GraphFunction>> inlineFunctions(
+static std::vector<std::unique_ptr<GraphFunction>> inlineFunctions(
     const std::vector<Method>& initial_methods,
     bool incl_dependent_functions) {
   std::set<std::pair<std::string, Function*>> visited;
@@ -149,7 +149,6 @@ mobile::Code compileGraphToMobileCode(
 
   // operator names
   std::vector<std::string> method_names;
-  std::vector<int64_t> op_debug_handles;
   int next_new_op_index = 0;
 
   auto op_to_specified_args = code.op_to_num_specified_args();
@@ -166,15 +165,14 @@ mobile::Code compileGraphToMobileCode(
       // and is not allowed. For an operator with num_args = -1, it means the
       // number of arguments is not available for this operator, we don't do any
       // backward compatibility adaptation at runtime.
-      c10::optional<int> num_args = c10::nullopt;
+      std::optional<int> num_args = std::nullopt;
       auto it = op_to_specified_args.find(unique_name);
       if (it != op_to_specified_args.end()) {
         num_args = it->second;
       }
       mobile_code.operator_input_sizes_.emplace_back(num_args.value_or(-1));
       mobile_code.op_names_.emplace_back(opname);
-      auto func = mobile::makeOperatorFunction(
-          opname, num_args, compilation_options.model_version);
+      auto func = mobile::makeOperatorFunction(opname, num_args);
       TORCH_INTERNAL_ASSERT(
           func.has_value(),
           "Operator with name: ",
@@ -212,7 +210,7 @@ mobile::Code compileGraphToMobileCode(
           for (const TypePtr& element_type : input_type->containedTypes()) {
             TORCH_CHECK(
                 element_type->kind() != TypeKind::ClassType,
-                "Returining a list or dictionary with pytorch class type ",
+                "Returning a list or dictionary with pytorch class type ",
                 "is not supported in mobile module "
                 "(List[Foo] or Dict[int, Foo] for class Foo(torch.nn.Module)). "
                 "Workaround: instead of using pytorch class as their element type, ",
@@ -270,7 +268,7 @@ IValue convertMobileFunctionToCodeTable(
 
   std::vector<IValue> operators;
   operators.reserve(code.op_names_.size());
-  for (int i = 0; i < code.op_names_.size(); ++i) {
+  for (unsigned i = 0; i < code.op_names_.size(); ++i) {
     const auto& opname = code.op_names_[i];
     const int size = code.operator_input_sizes_[i];
     if (compilation_options.enable_default_value_for_unspecified_arg) {
@@ -298,7 +296,7 @@ IValue convertMobileFunctionToCodeTable(
   return codeTable;
 }
 
-void checkSchema(const c10::FunctionSchema& schema) {
+static void checkSchema(const c10::FunctionSchema& schema) {
   TORCH_CHECK(
       schema.overload_name().empty(), // @TODO: is this check correct?
       "Overloads are not supported in mobile modules.");
@@ -309,7 +307,7 @@ void checkSchema(const c10::FunctionSchema& schema) {
       "A variable number of return values is not supported in mobile modules.");
 }
 
-bool isLoweredModule(const Module& m) {
+static bool isLoweredModule(const Module& m) {
   c10::QualifiedName type_name;
   if (m.type()->name()) {
     type_name = m.type()->name().value();
@@ -327,7 +325,7 @@ bool isLoweredModule(const Module& m) {
 // Check if the global static map of backend debug info
 // contains debug info for this module and any of its children.
 // If so combine all the maps together and return one.
-void getBackendDebugInfoMap(
+static void getBackendDebugInfoMap(
     const Module& m,
     BackendDebugInfoMapType& debug_map) {
   if (isLoweredModule(m)) {
@@ -341,6 +339,25 @@ void getBackendDebugInfoMap(
   for (const auto& c : m.children()) {
     getBackendDebugInfoMap(c, debug_map);
   }
+}
+
+static uint64_t get_min_operator_version_from_version_map(
+    const mobile::Module& module) {
+  uint64_t min_version = caffe2::serialize::kMinSupportedFileFormatVersion;
+  for (const auto& func : module.compilation_unit().methods()) {
+    for (const auto& op_name : func->get_code().op_names_) {
+      auto schema_name = op_name.overload_name.empty()
+          ? op_name.name
+          : op_name.name + "." + op_name.overload_name;
+      auto version_entry = get_operator_version_map().find(schema_name);
+      if (version_entry != get_operator_version_map().end()) {
+        const auto& entry = version_entry->second;
+        min_version = std::max(
+            min_version, uint64_t(entry[entry.size() - 1].bumped_at_version));
+      }
+    }
+  }
+  return min_version;
 }
 
 mobile::Module jitModuleToMobile(
@@ -377,8 +394,10 @@ mobile::Module jitModuleToMobile(
       backend_debug_info_map.begin(), backend_debug_info_map.end());
   m.setDebugTable(MobileDebugTable(
       debug_handle_cs_ptr_map.begin(), debug_handle_cs_ptr_map.end()));
+  m.set_min_operator_version(
+      static_cast<int64_t>(get_min_operator_version_from_version_map(m)));
+  m.set_bytecode_version(options.model_version);
   return m;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

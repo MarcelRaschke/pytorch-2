@@ -2,8 +2,8 @@
 
 # Torch
 import torch
+import torch.ao.nn.quantized.functional as qF
 import torch.nn.functional as F
-import torch.nn.quantized.functional as qF
 
 # Standard library
 import numpy as np
@@ -16,10 +16,7 @@ from torch.testing._internal.common_quantization import (
     _make_conv_test_input,
 )
 from torch.testing._internal.common_quantized import override_quantized_engine
-from torch.testing._internal.common_utils import (
-    IS_PPC,
-    TEST_WITH_UBSAN,
-)
+from torch.testing._internal.common_utils import IS_PPC
 
 class TestQuantizedFunctionalOps(QuantizationTestCase):
     def test_relu_api(self):
@@ -94,7 +91,7 @@ class TestQuantizedFunctionalOps(QuantizationTestCase):
         if qengine not in torch.backends.quantized.supported_engines:
             return
         if qengine == 'qnnpack':
-            if IS_PPC or TEST_WITH_UBSAN:
+            if IS_PPC:
                 return
             use_channelwise = False
 
@@ -147,7 +144,7 @@ class TestQuantizedFunctionalOps(QuantizationTestCase):
         if qengine not in torch.backends.quantized.supported_engines:
             return
         if qengine == 'qnnpack':
-            if IS_PPC or TEST_WITH_UBSAN:
+            if IS_PPC:
                 return
 
         input_feature_map_size = (H, W)

@@ -1,13 +1,10 @@
 #include <torch/csrc/distributed/autograd/rpc_messages/rpc_with_autograd.h>
-#include <c10/util/C++17.h>
 #include <torch/csrc/distributed/rpc/rpc_agent.h>
 #include <torch/csrc/distributed/rpc/utils.h>
 #include <torch/csrc/jit/serialization/pickle.h>
 #include <torch/csrc/utils/byte_order.h>
 
-namespace torch {
-namespace distributed {
-namespace autograd {
+namespace torch::distributed::autograd {
 
 using rpc::Message;
 using rpc::MessageType;
@@ -66,11 +63,12 @@ c10::intrusive_ptr<Message> RpcWithAutograd::toMessageImpl() && {
     deviceMap.insert(mapEntry.first.str(), mapEntry.second.str());
   }
 
-  std::vector<at::IValue> ivalues{wrappedMessageType,
-                                  autogradMetadata_.autogradContextId,
-                                  autogradMetadata_.autogradMessageId,
-                                  fromWorkerId_,
-                                  deviceMap};
+  std::vector<at::IValue> ivalues{
+      wrappedMessageType,
+      autogradMetadata_.autogradContextId,
+      autogradMetadata_.autogradMessageId,
+      fromWorkerId_,
+      deviceMap};
 
   // Now pickle using JIT pickler.
   std::vector<torch::Tensor> tensorTable;
@@ -108,8 +106,9 @@ std::unique_ptr<RpcWithAutograd> RpcWithAutograd::fromMessage(
       static_cast<MessageType>(tupleElements[0].toInt());
   AutogradMetadata autogradMetadata(
       tupleElements[1].toInt(), tupleElements[2].toInt());
-  worker_id_t workerId = tupleElements[3].toInt();
-  auto c10DeviceMap = tupleElements[4].to<c10::Dict<std::string, std::string>>();
+  worker_id_t workerId = static_cast<worker_id_t>(tupleElements[3].toInt());
+  auto c10DeviceMap =
+      tupleElements[4].to<c10::Dict<std::string, std::string>>();
 
   // Convert to regular map.
   rpc::DeviceMap deviceMap;
@@ -169,11 +168,8 @@ rpc::worker_id_t RpcWithAutograd::fromWorkerId() const {
   return fromWorkerId_;
 }
 
-const rpc::DeviceMap& RpcWithAutograd::
-    deviceMap() {
+const rpc::DeviceMap& RpcWithAutograd::deviceMap() {
   return deviceMap_;
 }
 
-} // namespace autograd
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::autograd

@@ -1,14 +1,17 @@
 """
 EXEC: Ensure that source files are not executable.
 """
+
+from __future__ import annotations
+
 import argparse
 import json
 import logging
 import os
 import sys
-
 from enum import Enum
-from typing import NamedTuple, Optional
+from typing import NamedTuple
+
 
 LINTER_CODE = "EXEC"
 
@@ -21,18 +24,18 @@ class LintSeverity(str, Enum):
 
 
 class LintMessage(NamedTuple):
-    path: Optional[str]
-    line: Optional[int]
-    char: Optional[int]
+    path: str | None
+    line: int | None
+    char: int | None
     code: str
     severity: LintSeverity
     name: str
-    original: Optional[str]
-    replacement: Optional[str]
-    description: Optional[str]
+    original: str | None
+    replacement: str | None
+    description: str | None
 
 
-def check_file(filename: str) -> Optional[LintMessage]:
+def check_file(filename: str) -> LintMessage | None:
     is_executable = os.access(filename, os.X_OK)
     if is_executable:
         return LintMessage(
@@ -51,13 +54,17 @@ def check_file(filename: str) -> Optional[LintMessage]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="native functions linter", fromfile_prefix_chars="@",
+        description="exec linter",
+        fromfile_prefix_chars="@",
     )
     parser.add_argument(
-        "--verbose", action="store_true", help="location of native_functions.yaml",
+        "--verbose",
+        action="store_true",
     )
     parser.add_argument(
-        "filenames", nargs="+", help="paths to lint",
+        "filenames",
+        nargs="+",
+        help="paths to lint",
     )
 
     args = parser.parse_args()

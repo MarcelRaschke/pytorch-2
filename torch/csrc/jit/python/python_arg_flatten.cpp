@@ -5,9 +5,7 @@
 
 #include <torch/csrc/autograd/grad_mode.h>
 
-namespace torch {
-namespace jit {
-namespace python {
+namespace torch::jit::python {
 
 using namespace torch::autograd;
 using namespace at;
@@ -29,6 +27,10 @@ static constexpr char NoneType = 'n';
 } // namespace D
 
 namespace {
+
+inline bool PyNone_Check(PyObject* o) {
+  return o == Py_None;
+}
 
 template <typename T>
 py::object cast_handle_sequence(std::vector<py::handle> objs) {
@@ -53,12 +55,13 @@ void flatten_rec(PyObject* obj, ParsedArgs& args) {
       flatten_rec(item.ptr(), args);
     structure.push_back(D::ListClose);
   } else if (PyDict_Check(obj)) {
-    auto dict_items = PyDict_Items(obj);
+    auto* dict_items = PyDict_Items(obj);
     structure.push_back(D::DictOpen);
     for (auto item : py::reinterpret_borrow<py::list>(dict_items)) {
       flatten_rec(item.ptr(), args);
     }
     structure.push_back(D::DictClose);
+    Py_DECREF(dict_items);
   } else if (THPUtils_checkString(obj)) {
     string str = THPUtils_unpackString(obj);
     args.desc.strings.emplace_back(str);
@@ -68,7 +71,7 @@ void flatten_rec(PyObject* obj, ParsedArgs& args) {
     args.vars.push_back(var);
     args.desc.metadata.emplace_back(var);
     args.desc.structure.push_back(D::Variable);
-  } else if (strcmp(THPUtils_typename(obj), "NoneType") == 0) {
+  } else if (PyNone_Check(obj)) {
     args.desc.structure.push_back(D::NoneType);
   } else if (PyBool_Check(obj)) { // Wrap bools in Bool tensors
     at::Tensor var = scalar_to_tensor(at::Scalar(THPUtils_unpackBool(obj)));
@@ -114,7 +117,11 @@ py::object cast_sequence(std::vector<py::object> objs) {
   for (const auto i : c10::irange(num_objs)) {
     sequence[i] = std::move(objs[i]);
   }
+#if C10_RETURN_MOVE_IF_OLD_COMPILER
   return std::move(sequence);
+#else
+  return sequence;
+#endif
 }
 
 py::object cast_dict(std::vector<py::object> objs) {
@@ -124,7 +131,11 @@ py::object cast_dict(std::vector<py::object> objs) {
     py::tuple obj = py::reinterpret_borrow<py::tuple>(objs[i]);
     sequence[obj[0]] = obj[1];
   }
+#if C10_RETURN_MOVE_IF_OLD_COMPILER
   return std::move(sequence);
+#else
+  return sequence;
+#endif
 }
 
 py::object unflatten_rec(
@@ -190,6 +201,4 @@ PyObject* unflatten(ArrayRef<Variable> vars, const IODescriptor& desc) {
   return output.release().ptr();
 }
 
-} // namespace python
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::python

@@ -9,15 +9,13 @@
 
 #import <ATen/ATen.h>
 
-namespace at {
-namespace native {
-namespace metal {
+namespace at::native::metal {
 
 using MetalTensorImpl = at::MetalTensorImpl<MetalTensorImplStorage>;
 Tensor conv2d(
     const Tensor& input,
     const Tensor& weight,
-    const c10::optional<at::Tensor>& bias,
+    const std::optional<at::Tensor>& bias,
     IntArrayRef stride,
     IntArrayRef padding,
     IntArrayRef dilation,
@@ -97,7 +95,7 @@ Tensor conv2d(const Tensor& input, Conv2dOpContext& context) {
   return output;
 }
 
-Tensor conv2d_prepack_run(
+static Tensor conv2d_prepack_run(
     const Tensor& input,
     const c10::intrusive_ptr<Conv2dOpContext>& op_context) {
   return conv2d(input, *op_context);
@@ -106,13 +104,13 @@ Tensor conv2d_prepack_run(
 } // namespace prepack
 
 TORCH_LIBRARY_IMPL(aten, Metal, m) {
-  m.impl(TORCH_SELECTIVE_NAME("aten::conv2d"), TORCH_FN(conv2d));
+  // NB: this didn't actually do anything; need to generalize this to
+  // work for general convolution and register to aten::convolution
+  // m.impl(TORCH_SELECTIVE_NAME("aten::conv2d"), TORCH_FN(conv2d));
 };
 
 TORCH_LIBRARY_IMPL(metal_prepack, Metal, m) {
   m.impl(TORCH_SELECTIVE_NAME("metal_prepack::conv2d_run"), prepack::conv2d_prepack_run);
 }
 
-}
-}
-}
+} // namespace at::native::metal

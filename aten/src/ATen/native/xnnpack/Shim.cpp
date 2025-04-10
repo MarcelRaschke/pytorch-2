@@ -1,6 +1,8 @@
 #ifndef USE_XNNPACK
 
 #include <ATen/native/xnnpack/Common.h>
+#include <ATen/native/xnnpack/Engine.h>
+#include <ATen/core/Tensor.h>
 
 //
 // This file is here so as to provide an implementation even in cases where
@@ -12,9 +14,7 @@
 // trigger an error.
 //
 
-namespace at {
-namespace native {
-namespace xnnpack {
+namespace at::native::xnnpack {
 namespace internal {
 namespace {
 
@@ -31,7 +31,7 @@ bool available() {
 bool use_convolution2d(
     const Tensor&,
     const Tensor&,
-    const c10::optional<IntArrayRef>,
+    const at::OptionalIntArrayRef,
     const IntArrayRef,
     const IntArrayRef,
     const IntArrayRef,
@@ -89,9 +89,6 @@ Tensor max_pool2d(
   TORCH_CHECK(false, internal::kError);
 }
 
-} // namespace xnnpack
-
-} // namespace native
-} // namespace at
+} // namespace at::native::xnnpack
 
 #endif /* USE_XNNPACK */

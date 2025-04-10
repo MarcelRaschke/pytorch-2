@@ -10,8 +10,7 @@
 
 #include <ATen/core/symbol.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 c10::AliasAnalysisKind aliasAnalysisFromSchema() {
@@ -22,7 +21,7 @@ c10::AliasAnalysisKind aliasAnalysisFromSchema() {
 // helper to determine if an optional tensor argument/value passed in is
 // statically defined (neither a None constant nor a Optional[Tensor] type)
 // return yes, no, or no value if we can't tell
-c10::optional<bool> isDefined(Value* tensor) {
+static std::optional<bool> isDefined(Value* tensor) {
   if (tensor->type()->isSubtypeOf(*TensorType::get())) {
     return true;
   }
@@ -32,7 +31,7 @@ c10::optional<bool> isDefined(Value* tensor) {
   return {};
 }
 
-bool isDecomposableNorm(Node* normalize_op) {
+static bool isDecomposableNorm(Node* normalize_op) {
   static const OperatorSet decomposable_normalization_ops = {
       "aten::batch_norm(Tensor input, Tensor? weight, Tensor? bias, Tensor? running_mean, Tensor? running_var, bool training, float momentum, float eps, bool cudnn_enabled) -> Tensor",
       "aten::layer_norm(Tensor input, int[] normalized_shape, Tensor? weight, Tensor? bias, float eps, bool cudnn_enable) -> Tensor",
@@ -44,7 +43,7 @@ bool isDecomposableNorm(Node* normalize_op) {
   auto device = input->type()->expectRef<TensorType>().device();
   // As of now, we do the decomposition for batchnorm/layernorm on GPU device
   // only
-  if (!device || (*device).is_cpu()) {
+  if (!device || !(*device).is_cuda()) {
     return false;
   }
 
@@ -85,7 +84,7 @@ RegisterOperators reg_ops(
          },
          aliasAnalysisFromSchema())});
 
-bool DecomposeOps(Block* block, CompilationUnit& decompose_funcs) {
+static bool DecomposeOps(Block* block, CompilationUnit& decompose_funcs) {
   bool decomposed = false;
   for (auto it = block->nodes().begin(), end = block->nodes().end(); it != end;
        ++it) {
@@ -231,5 +230,4 @@ void DecomposeOps(std::shared_ptr<Graph>& graph) {
   }
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

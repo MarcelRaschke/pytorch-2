@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# mypy: allow-untyped-defs
 
 # Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
@@ -9,16 +10,16 @@
 import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Dict, Union, Optional
+from typing import Optional, Union
 
+
+__all__ = ["EventSource", "Event", "NodeState", "RdzvEvent"]
 
 EventMetadataValue = Union[str, int, float, bool, None]
 
 
 class EventSource(str, Enum):
-    """
-    Known identifiers of the event producers.
-    """
+    """Known identifiers of the event producers."""
 
     AGENT = "AGENT"
     WORKER = "WORKER"
@@ -27,20 +28,21 @@ class EventSource(str, Enum):
 @dataclass
 class Event:
     """
-    The class represents the generic event that occurs during the torchelastic
-    job execution. The event can be any kind of meaningful action.
+    The class represents the generic event that occurs during the torchelastic job execution.
+
+    The event can be any kind of meaningful action.
 
     Args:
         name: event name.
         source: the event producer, e.g. agent or worker
-        timestamp: timestamp in milliseconds when event occured.
+        timestamp: timestamp in milliseconds when event occurred.
         metadata: additional data that is associated with the event.
     """
 
     name: str
     source: EventSource
     timestamp: int = 0
-    metadata: Dict[str, EventMetadataValue] = field(default_factory=dict)
+    metadata: dict[str, EventMetadataValue] = field(default_factory=dict)
 
     def __str__(self):
         return self.serialize()
@@ -51,7 +53,7 @@ class Event:
             return data
         if isinstance(data, str):
             data_dict = json.loads(data)
-        data_dict["source"] = EventSource[data_dict["source"]]
+        data_dict["source"] = EventSource[data_dict["source"]]  # type: ignore[possibly-undefined]
         return Event(**data_dict)
 
     def serialize(self) -> str:
@@ -59,9 +61,7 @@ class Event:
 
 
 class NodeState(str, Enum):
-    """
-    The states that a node can be in rendezvous.
-    """
+    """The states that a node can be in rendezvous."""
 
     INIT = "INIT"
     RUNNING = "RUNNING"
@@ -107,7 +107,7 @@ class RdzvEvent:
             return data
         if isinstance(data, str):
             data_dict = json.loads(data)
-        data_dict["node_state"] = NodeState[data_dict["node_state"]]
+        data_dict["node_state"] = NodeState[data_dict["node_state"]]  # type: ignore[possibly-undefined]
         return RdzvEvent(**data_dict)
 
     def serialize(self) -> str:

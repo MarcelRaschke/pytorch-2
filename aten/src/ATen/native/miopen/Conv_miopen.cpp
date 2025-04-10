@@ -1,7 +1,24 @@
-#include <ATen/ATen.h>
-#include <ATen/NativeFunctions.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <ATen/Config.h>
 #include <ATen/native/ConvUtils.h>
+
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/empty.h>
+#include <ATen/ops/empty_like.h>
+#include <ATen/ops/empty_native.h>
+#include <ATen/ops/miopen_convolution_add_relu_native.h>
+#include <ATen/ops/miopen_convolution_native.h>
+#include <ATen/ops/miopen_convolution_relu_native.h>
+#include <ATen/ops/miopen_convolution_transpose_native.h>
+#include <ATen/ops/miopen_depthwise_convolution_native.h>
+#include <ATen/ops/squeeze.h>
+#include <ATen/ops/sum.h>
+#include <ATen/ops/zeros.h>
+#endif
 
 // TODO: Remove the condition on AT_ROCM_ENABLED entirely,
 // don't build this file as part of CPU build.
@@ -14,92 +31,106 @@ namespace at { namespace native {
 // See Note [ATen preprocessor philosophy]
 
 at::Tensor miopen_convolution(
-    const Tensor& input, const Tensor& weight, const c10::optional<Tensor>& bias_opt /* optional */,
+    const Tensor& input, const Tensor& weight, const std::optional<Tensor>& bias_opt /* optional */,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_convolution: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_convolution_backward_input(
     IntArrayRef input_size, const at::Tensor& grad_output, const at::Tensor& weight,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_convolution_backward_input: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_backward_input: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_convolution_backward_weight(
     IntArrayRef weight_size, const at::Tensor& grad_output, const at::Tensor& input,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_convolution_backward_weight: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_backward_weight: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_convolution_backward_bias(
     const at::Tensor& grad_output) {
-  AT_ERROR("miopen_convolution_backward_bias: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_backward_bias: ATen not compiled with MIOpen support");
 }
 
 std::tuple<at::Tensor,at::Tensor,at::Tensor> miopen_convolution_backward(
     const at::Tensor& input, const at::Tensor& grad_output, const at::Tensor& weight,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
-  AT_ERROR("miopen_convolution_backward: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_backward: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_convolution_transpose(
-    const Tensor& input, const Tensor& weight, const c10::optional<Tensor>& bias_opt /* optional */,
+    const Tensor& input, const Tensor& weight, const std::optional<Tensor>& bias_opt /* optional */,
     IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_convolution_transpose: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_transpose: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_convolution_transpose_backward_input(
     const at::Tensor& grad_output, const at::Tensor& weight,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_convolution_transpose_backward: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_transpose_backward: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_convolution_transpose_backward_weight(
     IntArrayRef weight_size, const at::Tensor& grad_output, const at::Tensor& input,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_convolution_transpose_backward_weight: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_transpose_backward_weight: ATen not compiled with MIOpen support");
 }
 
 std::tuple<at::Tensor,at::Tensor,at::Tensor> miopen_convolution_transpose_backward(
     const at::Tensor& input, const at::Tensor& grad_output, const at::Tensor& weight,
     IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
-  AT_ERROR("miopen_convolution_transpose_backward: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_convolution_transpose_backward: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_depthwise_convolution(
-    const Tensor& input, const Tensor& weight, const c10::optional<Tensor>& bias_opt /* optional */,
+    const Tensor& input, const Tensor& weight, const std::optional<Tensor>& bias_opt /* optional */,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_depthwise_convolution: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_depthwise_convolution: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_depthwise_convolution_backward_input(
     IntArrayRef input_size, const at::Tensor& grad_output, const at::Tensor& weight,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_depthwise_convolution_backward_input: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_depthwise_convolution_backward_input: ATen not compiled with MIOpen support");
 }
 
 at::Tensor miopen_depthwise_convolution_backward_weight(
     IntArrayRef weight_size, const at::Tensor& grad_output, const at::Tensor& input,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic) {
-  AT_ERROR("miopen_depthwise_convolution_backward_weight: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_depthwise_convolution_backward_weight: ATen not compiled with MIOpen support");
 }
 
 std::tuple<at::Tensor,at::Tensor,at::Tensor> miopen_depthwise_convolution_backward(
     const at::Tensor& input, const at::Tensor& grad_output, const at::Tensor& weight,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
     bool benchmark, bool deterministic, std::array<bool,3> output_mask) {
-  AT_ERROR("miopen_depthwise_convolution_backward: ATen not compiled with MIOpen support");
+  TORCH_CHECK(false, "miopen_depthwise_convolution_backward: ATen not compiled with MIOpen support");
+}
+
+
+at::Tensor miopen_convolution_add_relu(
+    const at::Tensor& input, const at::Tensor& weight, const at::Tensor& z,
+    const std::optional<Scalar>& alpha, const std::optional<Tensor>& bias, IntArrayRef stride,
+    IntArrayRef padding, IntArrayRef dilation, int64_t groups) {
+  TORCH_CHECK(false, "miopen_convolution_add_relu: ATen not compiled with MIOpen support");
+}
+
+at::Tensor miopen_convolution_relu(
+    const at::Tensor& input, const at::Tensor& weight, const std::optional<Tensor>& bias,
+    IntArrayRef stride, IntArrayRef padding, IntArrayRef dilation, int64_t groups) {
+  TORCH_CHECK(false, "miopen_convolution_relu: ATen not compiled with MIOpen support");
 }
 
 }}
@@ -127,58 +158,13 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> miopen_depthwise_convolution_backwa
 #include <stdint.h>
 #include <unordered_map>
 
+#define AT_MIOPEN_MAX_SOLUTIONS 10
 
 namespace at { namespace native {
 
 Tensor narrowGroup(const Tensor& t, int dim, int group_idx, int64_t groups) {
   auto group_size = t.size(dim) / groups;
   return t.narrow(dim, group_idx * group_size, group_size);
-}
-
-// ---------------------------------------------------------------------
-//
-// Checking
-//
-// ---------------------------------------------------------------------
-
-// Used on pad, stride and dilation
-static void check_args(CheckedFrom c, IntArrayRef args, size_t expected_size, const char* arg_name)
-{
-  TORCH_CHECK(args.size() <= expected_size,
-           "Too many ", arg_name, " values (", args.size(), ") supplied, expecting ",
-           expected_size, " (while checking arguments for ", c, ")");
-  TORCH_CHECK(args.size() >= expected_size,
-           "Not enough ", arg_name, " values (", args.size(), ") supplied, expecting ",
-           expected_size, " (while checking arguments for ", c, ")");
-
-  auto num_negative_values = std::count_if(args.begin(), args.end(), [](int x){return x < 0;});
-  if (num_negative_values > 0){
-    std::stringstream ss;
-    ss << arg_name << " should be greater than zero but got (";
-    std::copy(args.begin(), args.end() - 1, std::ostream_iterator<int>(ss,", "));
-    ss << args.back() <<  ")" << " (while checking arguments for " << c << ")";
-    AT_ERROR(ss.str());
-  }
-}
-
-// see NOTE [ Convolution checks] in src/Aten/native/cudnn/Conv.cpp
-static void convolution_shape_check(
-    CheckedFrom c,
-    const TensorGeometryArg& input, const TensorGeometryArg& weight, const TensorGeometryArg& output,
-    IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups)
-{
-  check_args(c, padding, input->dim() - 2, "padding");
-  check_args(c, stride, padding.size(), "stride");
-  check_args(c, dilation, padding.size(), "dilation");
-
-  // Input
-  checkDimRange(c, input, 3, 6 /* exclusive */);
-  checkSize(c, input, input_channels_dim, weight->size(1) * groups);
-
-  // Weight
-  checkSameDim(c, input, weight);
-
-  checkSameDim(c, input, output);
 }
 
 // This POD struct is used to let us easily compute hashes of the
@@ -201,7 +187,7 @@ struct ConvolutionParams
 };
 // ConvolutionParams must be a POD because we read out its memory
 // contenst as char* when hashing
-static_assert(std::is_pod<ConvolutionParams>::value, "ConvolutionParams not POD");
+static_assert(std::is_standard_layout_v<ConvolutionParams>, "ConvolutionParams not POD");
 
 void setConvolutionParams(
     ConvolutionParams* params, miopenHandle_t handle,
@@ -378,15 +364,15 @@ struct algorithm_search<miopenConvFwdAlgorithm_t> {
   static BenchmarkCache<algo_t>& cache() { return fwd_algos; }
   static BenchmarkCache<size_t>& wsscache() { return fwd_wssizes; }
 
-  static perf_t findAlgorithm(const ConvolutionArgs& args) {
+  static perf_t findAlgorithm(const ConvolutionArgs& args, bool benchmark) {
     int perf_count;
     perf_t perf_results;
     size_t max_ws_size = getWorkspaceSize(args, DEFAULT_ALGO);
     Workspace ws(max_ws_size);
     MIOPEN_CHECK(miopenFindConvolutionForwardAlgorithm(
         args.handle,
-        args.idesc.desc(), args.input.data_ptr(),
-        args.wdesc.desc(), args.weight.data_ptr(),
+        args.idesc.desc(), args.input.const_data_ptr(),
+        args.wdesc.desc(), args.weight.const_data_ptr(),
         args.cdesc.desc(),
         args.odesc.desc(), args.output.data_ptr(),
         1,        // just return the fastest
@@ -394,8 +380,51 @@ struct algorithm_search<miopenConvFwdAlgorithm_t> {
         &perf_results,
         ws.data,
         ws.size,
-        false));
+        benchmark));
     return perf_results;
+  }
+
+  static miopenConvSolution_t getSolution(const ConvolutionArgs& args, bool force_default) {
+    size_t max_solution_count;
+    size_t solution_count;
+    miopenConvSolution_t solutions[AT_MIOPEN_MAX_SOLUTIONS];
+    MIOPEN_CHECK(miopenConvolutionForwardGetSolutionCount(
+        args.handle,
+        args.wdesc.desc(),
+        args.idesc.desc(),
+        args.cdesc.desc(),
+        args.odesc.desc(),
+        &max_solution_count));
+    if (max_solution_count > AT_MIOPEN_MAX_SOLUTIONS) {
+        TORCH_CHECK(false, "miopenConvFwdAlgorithm_t getSolution max_solution_count > AT_MIOPEN_MAX_SOLUTIONS");
+    }
+    MIOPEN_CHECK(miopenConvolutionForwardGetSolution(
+        args.handle,
+        args.wdesc.desc(),
+        args.idesc.desc(),
+        args.cdesc.desc(),
+        args.odesc.desc(),
+        max_solution_count,
+        &solution_count,
+        solutions));
+
+    if (force_default) {
+        // find default alg
+        for (size_t i=0; i<solution_count; ++i) {
+            if (solutions[i].algorithm == (miopenConvAlgorithm_t)DEFAULT_ALGO) {
+                return solutions[i];
+            }
+        }
+        // default algo was not found, select first algo without workspace requirement
+        for (size_t i=0; i<solution_count; ++i) {
+            if (solutions[i].workspace_size == 0) {
+                return solutions[i];
+            }
+        }
+        // now what? fall through and hope for the best
+    }
+
+    return solutions[0];
   }
 };
 
@@ -408,15 +437,15 @@ struct algorithm_search<miopenConvBwdDataAlgorithm_t> {
   static BenchmarkCache<algo_t>& cache() { return bwd_data_algos; }
   static BenchmarkCache<size_t>& wsscache() { return bwd_data_wssizes; }
 
-  static perf_t findAlgorithm(const ConvolutionArgs& args) {
+  static perf_t findAlgorithm(const ConvolutionArgs& args, bool benchmark) {
     int perf_count;
     perf_t perf_results;
     size_t max_ws_size = getWorkspaceSize(args, DEFAULT_ALGO);
     Workspace ws(max_ws_size);
     MIOPEN_CHECK(miopenFindConvolutionBackwardDataAlgorithm(
         args.handle,
-        args.odesc.desc(), args.output.data_ptr(),
-        args.wdesc.desc(), args.weight.data_ptr(),
+        args.odesc.desc(), args.output.const_data_ptr(),
+        args.wdesc.desc(), args.weight.const_data_ptr(),
         args.cdesc.desc(),
         args.idesc.desc(), args.input.data_ptr(),
         1,      // just return the fastest
@@ -424,8 +453,51 @@ struct algorithm_search<miopenConvBwdDataAlgorithm_t> {
         &perf_results,
         ws.data,
         ws.size,
-        false));
+        benchmark));
     return perf_results;
+  }
+
+  static miopenConvSolution_t getSolution(const ConvolutionArgs& args, bool force_default) {
+    size_t max_solution_count;
+    size_t solution_count;
+    miopenConvSolution_t solutions[AT_MIOPEN_MAX_SOLUTIONS];
+    MIOPEN_CHECK(miopenConvolutionBackwardDataGetSolutionCount(
+        args.handle,
+        args.odesc.desc(),
+        args.wdesc.desc(),
+        args.cdesc.desc(),
+        args.idesc.desc(),
+        &max_solution_count));
+    if (max_solution_count > AT_MIOPEN_MAX_SOLUTIONS) {
+        TORCH_CHECK(false, "miopenConvBwdDataAlgorithm_t getSolution max_solution_count > AT_MIOPEN_MAX_SOLUTIONS");
+    }
+    MIOPEN_CHECK(miopenConvolutionBackwardDataGetSolution(
+        args.handle,
+        args.odesc.desc(),
+        args.wdesc.desc(),
+        args.cdesc.desc(),
+        args.idesc.desc(),
+        max_solution_count,
+        &solution_count,
+        solutions));
+
+    if (force_default) {
+        // find default alg
+        for (size_t i=0; i<solution_count; ++i) {
+            if (solutions[i].algorithm == (miopenConvAlgorithm_t)DEFAULT_ALGO) {
+                return solutions[i];
+            }
+        }
+        // default algo was not found, select first algo without workspace requirement
+        for (size_t i=0; i<solution_count; ++i) {
+            if (solutions[i].workspace_size == 0) {
+                return solutions[i];
+            }
+        }
+        // now what? fall through and hope for the best
+    }
+
+    return solutions[0];
   }
 };
 
@@ -438,15 +510,15 @@ struct algorithm_search<miopenConvBwdWeightsAlgorithm_t> {
   static BenchmarkCache<algo_t>& cache() { return bwd_filter_algos; }
   static BenchmarkCache<size_t>& wsscache() { return bwd_filter_wssizes; }
 
-  static perf_t findAlgorithm(const ConvolutionArgs& args) {
+  static perf_t findAlgorithm(const ConvolutionArgs& args, bool benchmark) {
     int perf_count;
     perf_t perf_results;
     size_t max_ws_size = getWorkspaceSize(args, DEFAULT_ALGO);
     Workspace ws(max_ws_size);
     MIOPEN_CHECK(miopenFindConvolutionBackwardWeightsAlgorithm(
         args.handle,
-        args.odesc.desc(), args.output.data_ptr(),
-        args.idesc.desc(), args.input.data_ptr(),
+        args.odesc.desc(), args.output.const_data_ptr(),
+        args.idesc.desc(), args.input.const_data_ptr(),
         args.cdesc.desc(),
         args.wdesc.desc(), args.weight.data_ptr(),
         1,      // just return the fastest
@@ -454,8 +526,51 @@ struct algorithm_search<miopenConvBwdWeightsAlgorithm_t> {
         &perf_results,
         ws.data,
         ws.size,
-        false));
+        benchmark));
     return perf_results;
+  }
+
+  static miopenConvSolution_t getSolution(const ConvolutionArgs& args, bool force_default) {
+    size_t max_solution_count;
+    size_t solution_count;
+    miopenConvSolution_t solutions[AT_MIOPEN_MAX_SOLUTIONS];
+    MIOPEN_CHECK(miopenConvolutionBackwardWeightsGetSolutionCount(
+        args.handle,
+        args.odesc.desc(),
+        args.idesc.desc(),
+        args.cdesc.desc(),
+        args.wdesc.desc(),
+        &max_solution_count));
+    if (max_solution_count > AT_MIOPEN_MAX_SOLUTIONS) {
+        TORCH_CHECK(false, "miopenConvBwdWeightsAlgorithm_t getSolution max_solution_count > AT_MIOPEN_MAX_SOLUTIONS");
+    }
+    MIOPEN_CHECK(miopenConvolutionBackwardWeightsGetSolution(
+        args.handle,
+        args.odesc.desc(),
+        args.idesc.desc(),
+        args.cdesc.desc(),
+        args.wdesc.desc(),
+        max_solution_count,
+        &solution_count,
+        solutions));
+
+    if (force_default) {
+        // find default alg
+        for (size_t i=0; i<solution_count; ++i) {
+            if (solutions[i].algorithm == (miopenConvAlgorithm_t)DEFAULT_ALGO) {
+                return solutions[i];
+            }
+        }
+        // default algo was not found, select first algo without workspace requirement
+        for (size_t i=0; i<solution_count; ++i) {
+            if (solutions[i].workspace_size == 0) {
+                return solutions[i];
+            }
+        }
+        // now what? fall through and hope for the best
+    }
+
+    return solutions[0];
   }
 };
 
@@ -478,13 +593,16 @@ void findAlgorithm(const ConvolutionArgs& args, bool benchmark, algo_t* algo) {
     return;
   }
 
-  auto perfResults = search::findAlgorithm(args);
+  auto perfResults = search::findAlgorithm(args, benchmark);
   *algo = reinterpret_cast<algo_t&>(perfResults);
 
   cache.insert(args.params, *algo);
   wsscache.insert(args.params, perfResults.memory);
 
-  c10::hip::HIPCachingAllocator::emptyCache();
+  if (at::native::_cudnn_get_conv_benchmark_empty_cache()) {
+      c10::hip::HIPCachingAllocator::emptyCache();
+  }
+
 }
 
 template<typename algo_t>
@@ -501,7 +619,7 @@ Workspace chooseAlgorithm(
   try {
     return Workspace(workspace_size);
   } catch (const std::exception& e) {
-    hipGetLastError(); // clear OOM error
+    std::ignore = hipGetLastError(); // clear OOM error
 
     // switch to default algorithm and record it in the cache to prevent
     // further OOM errors
@@ -510,6 +628,24 @@ Workspace chooseAlgorithm(
     search::cache().insert(args.params, *algo);
     search::wsscache().insert(args.params, workspace_size);
     return Workspace(workspace_size);
+  }
+}
+
+template<typename algo_t>
+Workspace chooseSolution(const ConvolutionArgs& args, uint64_t* solution_id)
+{
+  using search = algorithm_search<algo_t>;
+  miopenConvSolution_t solution = search::getSolution(args, false);
+  try {
+    *solution_id = solution.solution_id;
+    return Workspace(solution.workspace_size);
+  } catch (const std::exception& e) {
+    std::ignore = hipGetLastError(); // clear OOM error
+
+    // switch to default algorithm
+    solution = search::getSolution(args, true);
+    *solution_id = solution.solution_id;
+    return Workspace(solution.workspace_size);
   }
 }
 
@@ -549,7 +685,7 @@ void miopen_convolution_add_bias_(CheckedFrom c, const TensorArg& output, const 
   Constant one(dataType, 1);
   Constant zero(dataType, 0);
 
-  MIOPEN_CHECK(miopenConvolutionForwardBias(handle, &one, bdesc.desc(), bias->data_ptr(),
+  MIOPEN_CHECK(miopenConvolutionForwardBias(handle, &one, bdesc.desc(), bias->const_data_ptr(),
                                      &zero, odesc.desc(), output->data_ptr()));
   */
 }
@@ -586,20 +722,34 @@ void raw_miopen_convolution_forward_out(
   args.idesc.set(input);
   args.wdesc.set(weight, input.suggest_memory_format(), 0);
   args.odesc.set(output);
-  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
 
-  miopenConvFwdAlgorithm_t fwdAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &fwdAlg);
+  if (deterministic && !benchmark) {
+      // immediate mode is triggered for the specific combination of benchmark=off deterministic=on
+      uint64_t solution_id;
+      Workspace workspace = chooseSolution<miopenConvFwdAlgorithm_t>(args, &solution_id);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      MIOPEN_CHECK(miopenConvolutionForwardImmediate(
+        args.handle,
+        args.wdesc.desc(), weight.const_data_ptr(),
+        args.idesc.desc(), input.const_data_ptr(),
+        args.cdesc.desc(),
+        args.odesc.desc(), output.data_ptr(), workspace.data, workspace.size, solution_id));
+  }
+  else {
+      miopenConvFwdAlgorithm_t fwdAlg;
+      Workspace workspace = chooseAlgorithm(args, benchmark, &fwdAlg);
 
-  MIOPEN_CHECK(miopenConvolutionForward(
-    args.handle,
-    &one, args.idesc.desc(), input.data_ptr(),
-    args.wdesc.desc(), weight.data_ptr(),
-    args.cdesc.desc(), fwdAlg, &zero,
-    args.odesc.desc(), output.data_ptr(), workspace.data, workspace.size));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      MIOPEN_CHECK(miopenConvolutionForward(
+        args.handle,
+        &one, args.idesc.desc(), input.const_data_ptr(),
+        args.wdesc.desc(), weight.const_data_ptr(),
+        args.cdesc.desc(), fwdAlg, &zero,
+        args.odesc.desc(), output.data_ptr(), workspace.data, workspace.size));
+  }
 }
 
 Tensor miopen_convolution_forward(
@@ -646,7 +796,7 @@ Tensor miopen_convolution_forward(
 }
 
 Tensor miopen_convolution(
-    const Tensor& input_t, const Tensor& weight_t, const c10::optional<Tensor>& bias_t_opt,
+    const Tensor& input_t, const Tensor& weight_t, const std::optional<Tensor>& bias_t_opt,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic)
 {
@@ -681,20 +831,34 @@ void raw_miopen_depthwise_convolution_forward_out(
   args.idesc.set(input);
   args.wdesc.set(weight, input.suggest_memory_format(), 0);
   args.odesc.set(output);
-  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
 
-  miopenConvFwdAlgorithm_t fwdAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &fwdAlg);
+  if (deterministic && !benchmark) {
+      // immediate mode is triggered for the specific combination of benchmark=off deterministic=on
+      uint64_t solution_id;
+      Workspace workspace = chooseSolution<miopenConvFwdAlgorithm_t>(args, &solution_id);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      MIOPEN_CHECK(miopenConvolutionForwardImmediate(
+        args.handle,
+        args.wdesc.desc(), weight.const_data_ptr(),
+        args.idesc.desc(), input.const_data_ptr(),
+        args.cdesc.desc(),
+        args.odesc.desc(), output.data_ptr(), workspace.data, workspace.size, solution_id));
+  }
+  else {
+      miopenConvFwdAlgorithm_t fwdAlg;
+      Workspace workspace = chooseAlgorithm(args, benchmark, &fwdAlg);
 
-  MIOPEN_CHECK(miopenConvolutionForward(
-    args.handle,
-    &one, args.idesc.desc(), input.data_ptr(),
-    args.wdesc.desc(), weight.data_ptr(),
-    args.cdesc.desc(), fwdAlg, &zero,
-    args.odesc.desc(), output.data_ptr(), workspace.data, workspace.size));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      MIOPEN_CHECK(miopenConvolutionForward(
+        args.handle,
+        &one, args.idesc.desc(), input.const_data_ptr(),
+        args.wdesc.desc(), weight.const_data_ptr(),
+        args.cdesc.desc(), fwdAlg, &zero,
+        args.odesc.desc(), output.data_ptr(), workspace.data, workspace.size));
+  }
 }
 
 Tensor miopen_depthwise_convolution_forward(
@@ -734,7 +898,7 @@ Tensor miopen_depthwise_convolution_forward(
 }
 
 Tensor miopen_depthwise_convolution(
-    const Tensor& input_t, const Tensor& weight_t, const c10::optional<Tensor>& bias_t_opt,
+    const Tensor& input_t, const Tensor& weight_t, const std::optional<Tensor>& bias_t_opt,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic)
 {
@@ -823,20 +987,34 @@ void raw_miopen_convolution_backward_weight_out(
   args.idesc.set(input);
   args.wdesc.set(grad_weight, input.suggest_memory_format(), 0);
   args.odesc.set(grad_output);
-  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
 
-  miopenConvBwdWeightsAlgorithm_t bwdFilterAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &bwdFilterAlg);
+  if (deterministic && !benchmark) {
+      // immediate mode is triggered for the specific combination of benchmark=off deterministic=on
+      uint64_t solution_id;
+      Workspace workspace = chooseSolution<miopenConvBwdWeightsAlgorithm_t>(args, &solution_id);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      MIOPEN_CHECK(miopenConvolutionBackwardWeightsImmediate(
+          args.handle,
+          args.odesc.desc(), grad_output.const_data_ptr(),
+          args.idesc.desc(), input.const_data_ptr(),
+          args.cdesc.desc(),
+          args.wdesc.desc(), grad_weight.data_ptr(), workspace.data, workspace.size, solution_id));
+  }
+  else {
+      miopenConvBwdWeightsAlgorithm_t bwdFilterAlg;
+      Workspace workspace = chooseAlgorithm(args, benchmark, &bwdFilterAlg);
 
-  MIOPEN_CHECK(miopenConvolutionBackwardWeights(
-      args.handle,
-      &one, args.odesc.desc(), grad_output.data_ptr(),
-      args.idesc.desc(), input.data_ptr(),
-      args.cdesc.desc(), bwdFilterAlg, &zero,
-      args.wdesc.desc(), grad_weight.data_ptr(), workspace.data, workspace.size));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      MIOPEN_CHECK(miopenConvolutionBackwardWeights(
+          args.handle,
+          &one, args.odesc.desc(), grad_output.const_data_ptr(),
+          args.idesc.desc(), input.const_data_ptr(),
+          args.cdesc.desc(), bwdFilterAlg, &zero,
+          args.wdesc.desc(), grad_weight.data_ptr(), workspace.data, workspace.size));
+  }
 }
 
 //Depthwise backward weights.
@@ -854,20 +1032,34 @@ void raw_miopen_depthwise_convolution_backward_weight_out(
   args.idesc.set(input);
   args.wdesc.set(grad_weight, input.suggest_memory_format(), 0);
   args.odesc.set(grad_output);
-  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
 
-  miopenConvBwdWeightsAlgorithm_t bwdFilterAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &bwdFilterAlg);
+  if (deterministic && !benchmark) {
+      // immediate mode is triggered for the specific combination of benchmark=off deterministic=on
+      uint64_t solution_id;
+      Workspace workspace = chooseSolution<miopenConvBwdWeightsAlgorithm_t>(args, &solution_id);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      MIOPEN_CHECK(miopenConvolutionBackwardWeightsImmediate(
+          args.handle,
+          args.odesc.desc(), grad_output.const_data_ptr(),
+          args.idesc.desc(), input.const_data_ptr(),
+          args.cdesc.desc(),
+          args.wdesc.desc(), grad_weight.data_ptr(), workspace.data, workspace.size, solution_id));
+  }
+  else {
+      miopenConvBwdWeightsAlgorithm_t bwdFilterAlg;
+      Workspace workspace = chooseAlgorithm(args, benchmark, &bwdFilterAlg);
 
-  MIOPEN_CHECK(miopenConvolutionBackwardWeights(
-      args.handle,
-      &one, args.odesc.desc(), grad_output.data_ptr(),
-      args.idesc.desc(), input.data_ptr(),
-      args.cdesc.desc(), bwdFilterAlg, &zero,
-      args.wdesc.desc(), grad_weight.data_ptr(), workspace.data, workspace.size));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      MIOPEN_CHECK(miopenConvolutionBackwardWeights(
+          args.handle,
+          &one, args.odesc.desc(), grad_output.const_data_ptr(),
+          args.idesc.desc(), input.const_data_ptr(),
+          args.cdesc.desc(), bwdFilterAlg, &zero,
+          args.wdesc.desc(), grad_weight.data_ptr(), workspace.data, workspace.size));
+  }
 }
 
 Tensor miopen_depthwise_convolution_backward_weight(
@@ -1046,20 +1238,34 @@ void raw_miopen_convolution_backward_input_out(
   args.idesc.set(grad_input);
   args.wdesc.set(weight, grad_output.suggest_memory_format(), 0);
   args.odesc.set(grad_output);
-  args.cdesc.set(dataType, c_mode, grad_output.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, c_mode, grad_output.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
 
-  miopenConvBwdDataAlgorithm_t bwdDataAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &bwdDataAlg);
+  if (deterministic && !benchmark) {
+      // immediate mode is triggered for the specific combination of benchmark=off deterministic=on
+      uint64_t solution_id;
+      Workspace workspace = chooseSolution<miopenConvBwdDataAlgorithm_t>(args, &solution_id);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      MIOPEN_CHECK(miopenConvolutionBackwardDataImmediate(
+          args.handle,
+          args.odesc.desc(), grad_output.const_data_ptr(),
+          args.wdesc.desc(), weight.const_data_ptr(),
+          args.cdesc.desc(),
+          args.idesc.desc(), grad_input.mutable_data_ptr(), workspace.data, workspace.size, solution_id));
+  }
+  else {
+      miopenConvBwdDataAlgorithm_t bwdDataAlg;
+      Workspace workspace = chooseAlgorithm(args, benchmark, &bwdDataAlg);
 
-  MIOPEN_CHECK(miopenConvolutionBackwardData(
-      args.handle,
-      &one, args.odesc.desc(), grad_output.data_ptr(),
-      args.wdesc.desc(), weight.data_ptr(),
-      args.cdesc.desc(), bwdDataAlg, &zero,
-      args.idesc.desc(), grad_input.data_ptr(), workspace.data, workspace.size));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      MIOPEN_CHECK(miopenConvolutionBackwardData(
+          args.handle,
+          &one, args.odesc.desc(), grad_output.const_data_ptr(),
+          args.wdesc.desc(), weight.const_data_ptr(),
+          args.cdesc.desc(), bwdDataAlg, &zero,
+          args.idesc.desc(), grad_input.mutable_data_ptr(), workspace.data, workspace.size));
+  }
 }
 
 // see NOTE [ Backward vs transpose convolutions ] in src/Aten/native/cudnn/Conv.cpp
@@ -1142,20 +1348,34 @@ void raw_miopen_depthwise_convolution_backward_input_out(
   args.idesc.set(grad_input);
   args.wdesc.set(weight, grad_output.suggest_memory_format(), 0);
   args.odesc.set(grad_output);
-  args.cdesc.set(dataType, c_mode, grad_output.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups);
+  args.cdesc.set(dataType, c_mode, grad_output.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
 
-  miopenConvBwdDataAlgorithm_t bwdDataAlg;
-  Workspace workspace = chooseAlgorithm(args, benchmark, &bwdDataAlg);
+  if (deterministic && !benchmark) {
+      // immediate mode is triggered for the specific combination of benchmark=off deterministic=on
+      uint64_t solution_id;
+      Workspace workspace = chooseSolution<miopenConvBwdDataAlgorithm_t>(args, &solution_id);
 
-  Constant one(dataType, 1);
-  Constant zero(dataType, 0);
+      MIOPEN_CHECK(miopenConvolutionBackwardDataImmediate(
+          args.handle,
+          args.odesc.desc(), grad_output.const_data_ptr(),
+          args.wdesc.desc(), weight.const_data_ptr(),
+          args.cdesc.desc(),
+          args.idesc.desc(), grad_input.mutable_data_ptr(), workspace.data, workspace.size, solution_id));
+  }
+  else {
+      miopenConvBwdDataAlgorithm_t bwdDataAlg;
+      Workspace workspace = chooseAlgorithm(args, benchmark, &bwdDataAlg);
 
-  MIOPEN_CHECK(miopenConvolutionBackwardData(
-      args.handle,
-      &one, args.odesc.desc(), grad_output.data_ptr(),
-      args.wdesc.desc(), weight.data_ptr(),
-      args.cdesc.desc(), bwdDataAlg, &zero,
-      args.idesc.desc(), grad_input.data_ptr(), workspace.data, workspace.size));
+      Constant one(dataType, 1);
+      Constant zero(dataType, 0);
+
+      MIOPEN_CHECK(miopenConvolutionBackwardData(
+          args.handle,
+          &one, args.odesc.desc(), grad_output.const_data_ptr(),
+          args.wdesc.desc(), weight.const_data_ptr(),
+          args.cdesc.desc(), bwdDataAlg, &zero,
+          args.idesc.desc(), grad_input.mutable_data_ptr(), workspace.data, workspace.size));
+  }
 }
 
 Tensor miopen_depthwise_convolution_backward_input(
@@ -1249,7 +1469,7 @@ std::tuple<at::Tensor,at::Tensor,at::Tensor> miopen_depthwise_convolution_backwa
 }
 
 Tensor miopen_convolution_transpose(
-    const Tensor& input_t, const Tensor& weight_t, const c10::optional<Tensor>& bias_t_opt,
+    const Tensor& input_t, const Tensor& weight_t, const std::optional<Tensor>& bias_t_opt,
     IntArrayRef padding, IntArrayRef output_padding, IntArrayRef stride, IntArrayRef dilation,
     int64_t groups, bool benchmark, bool deterministic)
 {
@@ -1269,9 +1489,222 @@ Tensor miopen_convolution_transpose(
   return output_t;
 }
 
-REGISTER_CUDA_DISPATCH(miopen_convolution_backward_stub, &miopen_convolution_backward);
-REGISTER_CUDA_DISPATCH(miopen_convolution_transpose_backward_stub, &miopen_convolution_transpose_backward);
-REGISTER_CUDA_DISPATCH(miopen_depthwise_convolution_backward_stub, &miopen_depthwise_convolution_backward);
+// MIOpen fused convolution bias activation forward
+void raw_miopen_convolution_relu_out(
+    const Tensor& output,
+    const Tensor& input,
+    const Tensor& weight,
+    const Tensor& bias,
+    IntArrayRef stride,
+    IntArrayRef padding,
+    IntArrayRef dilation,
+    int64_t groups,
+    bool benchmark,
+    bool deterministic) {
+
+  auto dataType = getMiopenDataType(input);
+  miopenConvolutionMode_t c_mode = miopenConvolution;
+
+  ConvolutionArgs args{ input, output, weight };
+  args.handle = getMiopenHandle();
+  setConvolutionParams(&args.params, args.handle, input, weight, padding, stride, dilation, groups, deterministic);
+  args.idesc.set(input);
+  args.wdesc.set(weight, input.suggest_memory_format(), 0);
+  args.odesc.set(output);
+  args.cdesc.set(dataType, c_mode, input.dim() - 2, args.params.padding, args.params.stride, args.params.dilation, args.params.groups, benchmark, deterministic);
+
+  TensorDescriptor bdesc;
+  bdesc.set(bias.expand({1, bias.size(0)}), output.dim());
+
+  // Create the fusion plan
+  miopenFusionPlanDescriptor_t fusePlanDesc;
+  miopenFusionOpDescriptor_t convoOp;
+  miopenFusionOpDescriptor_t biasOp;
+  miopenFusionOpDescriptor_t activOp;
+  MIOPEN_CHECK(miopenCreateFusionPlan(&fusePlanDesc, miopenVerticalFusion, args.idesc.desc()));
+  MIOPEN_CHECK(miopenCreateOpConvForward(fusePlanDesc, &convoOp, args.cdesc.desc(), args.wdesc.desc()));
+  MIOPEN_CHECK(miopenCreateOpBiasForward(fusePlanDesc, &biasOp, bdesc.desc()));
+  MIOPEN_CHECK(miopenCreateOpActivationForward(fusePlanDesc, &activOp, miopenActivationRELU));
+
+  // compile fusion plan
+  MIOPEN_CHECK(miopenCompileFusionPlan(args.handle, fusePlanDesc));
+
+  // Set the Args
+  float alpha = static_cast<float>(1);
+  float beta = static_cast<float>(0);
+  float activ_alpha = static_cast<float>(0);
+  float activ_beta = static_cast<float>(0);
+  float activ_gamma = static_cast<float>(0);
+  miopenOperatorArgs_t fusionArgs;
+  MIOPEN_CHECK(miopenCreateOperatorArgs(&fusionArgs));
+  MIOPEN_CHECK(miopenSetOpArgsConvForward(fusionArgs, convoOp, &alpha, &beta, weight.const_data_ptr()));
+  MIOPEN_CHECK(miopenSetOpArgsBiasForward(fusionArgs, biasOp, &alpha, &beta, bias.const_data_ptr()));
+  MIOPEN_CHECK(miopenSetOpArgsActivForward(fusionArgs, activOp, &alpha, &beta, activ_alpha, activ_beta, activ_gamma));
+
+  miopenExecuteFusionPlan(args.handle, fusePlanDesc, args.idesc.desc(), input.const_data_ptr(), args.odesc.desc(), output.data_ptr(), fusionArgs);
+
+  // Cleanup
+  miopenDestroyFusionPlan(fusePlanDesc);
+}
+
+static at::Tensor self_or_new_memory_format(at::Tensor& self, at::MemoryFormat memory_format) {
+  if (self.is_contiguous(memory_format)) {
+    return self;
+  }
+  return at::empty_like(self, self.options(), memory_format);
+}
+
+Tensor miopen_convolution_add_relu(
+    const Tensor& input,
+    const Tensor& weight,
+    const Tensor& z,
+    const std::optional<Scalar>& alpha,
+    const std::optional<Tensor>& bias,
+    IntArrayRef stride,
+    IntArrayRef padding,
+    IntArrayRef dilation,
+    int64_t groups) {
+
+  // MIOpen does not support fusion of add, the alpha2 * z step of the below cuDNN function:
+  // y = act ( alpha1 * conv(x) + alpha2 * z + bias )
+
+  auto memory_format = input.suggest_memory_format();
+
+  auto& ctx = at::globalContext();
+  bool benchmark = ctx.benchmarkCuDNN();
+
+  TensorArg input_arg  { input,  "input",  1 },
+            weight_arg { weight, "weight", 2 };
+  auto output = miopen_convolution_forward(
+      "miopen_convolution_add_relu",
+      input_arg,
+      weight_arg,
+      padding,
+      stride,
+      dilation,
+      groups,
+      benchmark,
+      false // deterministic
+  );
+
+  auto contig_output = self_or_new_memory_format(output, memory_format);
+
+  if (!output.is_same(contig_output)) {
+    contig_output.copy_(output);
+  }
+
+  auto _alpha = alpha.has_value() ? alpha.value().to<float>() : 1.0;
+  auto _bias = bias.has_value()
+          ? bias.value()
+          : at::zeros(
+                {contig_output.size(1)},
+                optTypeMetaToScalarType(contig_output.options().dtype_opt()),
+                contig_output.options().layout_opt(),
+                contig_output.options().device_opt(),
+                contig_output.options().pinned_memory_opt());
+
+  at::Tensor alpha_mul_z_add_bias = at::native::reshape_bias(input.dim(), _bias).add(z, _alpha);
+  contig_output.add_(alpha_mul_z_add_bias);
+  contig_output.relu_();
+
+  return contig_output;
+}
+
+Tensor miopen_convolution_relu(
+    const Tensor& input,
+    const Tensor& weight,
+    const std::optional<Tensor>& bias,
+    IntArrayRef stride,
+    IntArrayRef padding,
+    IntArrayRef dilation,
+    int64_t groups) {
+
+  auto memory_format = input.suggest_memory_format();
+
+  auto& ctx = at::globalContext();
+  bool benchmark = ctx.benchmarkCuDNN();
+
+  // MIOpen currently only supports MemoryFormat::Contiguous and fp32 and 2d
+  if (input.suggest_memory_format() == at::MemoryFormat::Contiguous
+          && input.scalar_type() == at::kFloat
+          && input.ndimension() == 4) {
+
+    // FuseFrozenConvAddRelu performs some tensor shape checking
+    Tensor output_t = at::detail::empty_cuda(
+        conv_output_size(
+            input.sizes(), weight.sizes(), padding, stride, dilation),
+        input.options().memory_format(input.suggest_memory_format()));
+    if (output_t.numel() == 0) {
+      return output_t;
+    }
+
+    auto _bias = bias.has_value()
+            ? bias.value()
+            : at::zeros(
+                  {output_t.size(1)},
+                  optTypeMetaToScalarType(output_t.options().dtype_opt()),
+                  output_t.options().layout_opt(),
+                  output_t.options().device_opt(),
+                  output_t.options().pinned_memory_opt());
+
+    raw_miopen_convolution_relu_out(
+        output_t,
+        input,
+        weight,
+        _bias,
+        stride,
+        padding,
+        dilation,
+        groups,
+        benchmark, // benchmark
+        false // deterministic
+    );
+
+    return output_t;
+  }
+  else {
+    // fallback
+
+    TensorArg input_arg  { input,  "input",  1 },
+              weight_arg { weight, "weight", 2 };
+    auto output = miopen_convolution_forward(
+        "miopen_convolution_relu",
+        input_arg,
+        weight_arg,
+        padding,
+        stride,
+        dilation,
+        groups,
+        benchmark,
+        false // deterministic
+    );
+
+    auto contig_output = self_or_new_memory_format(output, memory_format);
+
+    if (!output.is_same(contig_output)) {
+      contig_output.copy_(output);
+    }
+
+    auto _bias = bias.has_value()
+            ? bias.value()
+            : at::zeros(
+                  {contig_output.size(1)},
+                  optTypeMetaToScalarType(contig_output.options().dtype_opt()),
+                  contig_output.options().layout_opt(),
+                  contig_output.options().device_opt(),
+                  contig_output.options().pinned_memory_opt());
+
+    at::Tensor reshaped_bias = at::native::reshape_bias(input.dim(), _bias);
+    contig_output.add_(reshaped_bias);
+    contig_output.relu_();
+
+    return contig_output;
+  }
+}
+
+REGISTER_CUDA_DISPATCH(miopen_convolution_backward_stub, &miopen_convolution_backward)
+REGISTER_CUDA_DISPATCH(miopen_convolution_transpose_backward_stub, &miopen_convolution_transpose_backward)
+REGISTER_CUDA_DISPATCH(miopen_depthwise_convolution_backward_stub, &miopen_depthwise_convolution_backward)
 
 }}  // namespace
 

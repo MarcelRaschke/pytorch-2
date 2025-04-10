@@ -14,7 +14,7 @@ namespace c10 {
  *
  * This class implements a small subset of the generic functionality
  * implemented by folly:Synchronized<T>. Specifically, only withLock<T>
- * is implemeted here since it's the smallest possible API that is
+ * is implemented here since it's the smallest possible API that is
  * able to cover a large surface area of functionality offered by
  * folly::Synchronized<T>.
  */
@@ -26,7 +26,7 @@ class Synchronized final {
  public:
   Synchronized() = default;
   Synchronized(T const& data) : data_(data) {}
-  Synchronized(T&& data) : data_(data) {}
+  Synchronized(T&& data) : data_(std::move(data)) {}
 
   // Don't permit copy construction, move, assignment, or
   // move assignment, since the underlying std::mutex
@@ -35,6 +35,7 @@ class Synchronized final {
   Synchronized(Synchronized&&) = delete;
   Synchronized operator=(Synchronized const&) = delete;
   Synchronized operator=(Synchronized&&) = delete;
+  ~Synchronized() = default;
 
   /**
    * To use, call withLock<T> with a callback that accepts T either
@@ -42,9 +43,9 @@ class Synchronized final {
    * provided callback safely.
    */
   template <typename CB>
-  void withLock(CB cb) {
+  auto withLock(CB&& cb) {
     std::lock_guard<std::mutex> guard(this->mutex_);
-    cb(this->data_);
+    return std::forward<CB>(cb)(this->data_);
   }
 
   /**
@@ -53,9 +54,9 @@ class Synchronized final {
    * the provided callback safely.
    */
   template <typename CB>
-  void withLock(CB cb) const {
+  auto withLock(CB&& cb) const {
     std::lock_guard<std::mutex> guard(this->mutex_);
-    cb(this->data_);
+    return std::forward<CB>(cb)(this->data_);
   }
 };
 } // end namespace c10

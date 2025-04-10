@@ -1,8 +1,7 @@
 # Owner(s): ["module: autograd"]
 
 import torch
-
-from torch.testing._internal.common_utils import TestCase, run_tests, gradcheck
+from torch.testing._internal.common_utils import gradcheck, run_tests, TestCase
 
 
 class TestAutogradComplex(TestCase):
@@ -15,11 +14,11 @@ class TestAutogradComplex(TestCase):
         x1 = torch.view_as_complex(x0)
         x2 = torch.view_as_real(x1)
         x2.mul_(2)
-        x2.sum().backward()
+        x2.sum().abs().backward()
 
         y0 = y.clone()
         y0.mul_(2)
-        y0.sum().backward()
+        y0.sum().abs().backward()
 
         self.assertEqual(x.grad, y.grad)
 
@@ -35,11 +34,11 @@ class TestAutogradComplex(TestCase):
 
         x0 = fn(x)
         x0.mul_(2)
-        x0.sum().backward()
+        x0.sum().abs().backward()
 
         y0 = fn(y)
         y1 = y0.mul(2)
-        y1.sum().backward()
+        y1.sum().abs().backward()
 
         self.assertEqual(x.grad, y.grad)
 
@@ -55,11 +54,11 @@ class TestAutogradComplex(TestCase):
 
         x0 = fn(x)
         x0.mul_(2)
-        x0.sum().backward()
+        x0.sum().abs().backward()
 
         y0 = fn(y)
         y1 = y0.mul(2)
-        y1.sum().backward()
+        y1.sum().abs().backward()
 
         self.assertEqual(x.grad, y.grad)
 
@@ -71,7 +70,9 @@ class TestAutogradComplex(TestCase):
         # modified inplace
         res = x1.unbind(0)
 
-        with self.assertRaisesRegex(RuntimeError, "output of a function that returns multiple views"):
+        with self.assertRaisesRegex(
+            RuntimeError, "output of a function that returns multiple views"
+        ):
             res[0] += torch.rand(2, requires_grad=True)
 
         x.requires_grad_(True)
@@ -80,7 +81,9 @@ class TestAutogradComplex(TestCase):
         # modified inplace
         res = x1.unbind(0)
 
-        with self.assertRaisesRegex(RuntimeError, "output of a function that returns multiple views"):
+        with self.assertRaisesRegex(
+            RuntimeError, "output of a function that returns multiple views"
+        ):
             res[0] += torch.rand(2, requires_grad=True)
 
     def as_identity(self):
@@ -95,11 +98,11 @@ class TestAutogradComplex(TestCase):
         gradcheck(func, [z])
         func(z).backward()
 
-        z1 = z.clone().detach().requires_grad_(True)
+        z1 = z.detach().clone().requires_grad_(True)
         torch.select(z1, z1.dim() - 2, 0).sum().backward()
 
         self.assertEqual(z.grad, z1.grad)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run_tests()

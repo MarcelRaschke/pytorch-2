@@ -1,8 +1,7 @@
 #include <torch/csrc/jit/passes/add_if_then_else.h>
 #include <torch/csrc/jit/runtime/graph_iterator.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -13,7 +12,7 @@ bool hasNoNodes(Block* block) {
 
 bool hasTrivialSubBlocks(Node* node) {
   const auto blocks = node->blocks();
-  DCHECK_EQ(blocks.size(), 2);
+  TORCH_DCHECK_EQ(blocks.size(), 2);
 
   return hasNoNodes(blocks[0]) && hasNoNodes(blocks[1]);
 }
@@ -51,5 +50,4 @@ bool AddIfThenElseOp(std::shared_ptr<Graph>& graph) {
   return !to_replace.empty();
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

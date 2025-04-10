@@ -6,8 +6,7 @@
 
 #include <vector>
 
-namespace torch {
-namespace lazy {
+namespace torch::lazy {
 
 TORCH_API std::vector<int64_t> InversePermutation(
     c10::ArrayRef<int64_t> input_permutation);
@@ -23,8 +22,15 @@ std::vector<typename Container::value_type> PermuteDimensions(
     const Container& dimensions) {
   using T = typename Container::value_type;
   TORCH_CHECK(
-      dimensions.size() == permutation.size() && IsPermutation(permutation),
-      "Invalid permutation specified");
+      dimensions.size() == permutation.size(),
+      "Invalid permutation specified. dimensions.size() != permutation.size()  (",
+      dimensions.size(),
+      " vs. ",
+      permutation.size(),
+      ")");
+  TORCH_CHECK(
+      IsPermutation(permutation),
+      "Invalid permutation specified. Permutation is not permutation");
   std::vector<T> output(dimensions.size());
   for (const auto i : c10::irange(permutation.size())) {
     output[i] = dimensions[permutation[i]];
@@ -32,5 +38,4 @@ std::vector<typename Container::value_type> PermuteDimensions(
   return output;
 }
 
-} // namespace lazy
-} // namespace torch
+} // namespace torch::lazy

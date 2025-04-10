@@ -8,9 +8,7 @@
 
 #include <ATen/nnapi/nnapi_wrapper.h>
 
-namespace torch {
-namespace nnapi {
-namespace bind {
+namespace torch::nnapi::bind {
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 TORCH_API extern nnapi_wrapper* nnapi;
@@ -36,7 +34,20 @@ struct NnapiCompilation : torch::jit::CustomClassHolder {
     NnapiCompilation() = default;
     ~NnapiCompilation() override = default;
 
-    TORCH_API void init(at::Tensor serialized_model_tensor, std::vector<at::Tensor> parameter_buffers);
+    // only necessary for older models that still call init()
+    TORCH_API void init(
+      at::Tensor serialized_model_tensor,
+      std::vector<at::Tensor> parameter_buffers
+    );
+
+    TORCH_API void init2(
+      at::Tensor serialized_model_tensor,
+      const std::vector<at::Tensor>& parameter_buffers,
+      int64_t compilation_preference,
+      bool relax_f32_to_f16
+    );
+
+
     TORCH_API void run(std::vector<at::Tensor> inputs, std::vector<at::Tensor> outputs);
     static void get_operand_type(const at::Tensor& t, ANeuralNetworksOperandType* operand, std::vector<uint32_t>* dims);
 
@@ -46,8 +57,6 @@ struct NnapiCompilation : torch::jit::CustomClassHolder {
     int32_t num_outputs_ {};
 };
 
-} // namespace bind
-} // namespace nnapi
 } // namespace torch
 
 #endif // NNAPI_BIND_H_

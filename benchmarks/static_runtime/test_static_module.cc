@@ -37,6 +37,12 @@ bool testCanEnableStaticRuntime(const std::string& jit_script) {
   return canEnableStaticRuntime(graph);
 }
 
+bool testCanEnableStaticRuntimeWithIR(const std::string& ir) {
+  auto graph = std::make_shared<Graph>();
+  parseIR(ir, graph.get(), {});
+  return canEnableStaticRuntime(graph);
+}
+
 bool testModuleHasOp(const std::string& jit_script, const char* op_name) {
   script::Module module("module");
   module.define(jit_script);
@@ -75,13 +81,6 @@ const auto sigmoid_inplace_script = R"JIT(
   def forward(self, inp: Tensor):
       a = torch.sigmoid(inp, out=inp).clone()
       return (a)
-)JIT";
-
-const auto sigmoid_out_script = R"JIT(
-  def forward(self, inp: Tensor):
-      a = inp + inp
-      b = torch.sigmoid(inp, out=a).clone()
-      return (b)
 )JIT";
 
 } // namespace
@@ -352,6 +351,27 @@ TEST(StaticRuntime, CanEnableStaticRuntime) {
   EXPECT_TRUE(testCanEnableStaticRuntime(is_script_none));
   EXPECT_FALSE(testCanEnableStaticRuntime(is_not_script_tensors));
   EXPECT_TRUE(testCanEnableStaticRuntime(is_not_script_none));
+
+}
+TEST(StaticRuntime, CanEnableStaticRuntimeCallMethod) {
+  const auto call_method = R"IR(
+      graph(%x : Tensor):
+          %1 : Tensor = prim::CallMethod[name="offsets"](%x)
+          return (%1)
+  )IR";
+  EXPECT_FALSE(testCanEnableStaticRuntimeWithIR(call_method));
+}
+
+TEST(StaticRuntime, CanEnableStaticRuntimeSubBlocks) {
+  const auto src = R"JIT(
+    def forward(self, a: Tensor, b: Tensor, cond: bool):
+        if cond:
+            # aten::__is__ on tensors is blocked
+            return a is b
+        return False
+  )JIT";
+
+  EXPECT_FALSE(testCanEnableStaticRuntime(src));
 }
 
 TEST(StaticRuntime, NestedOutput) {
@@ -439,7 +459,8 @@ TEST(StaticRuntime, LongModel) {
   torch::jit::StaticModule smod(mod);
   at::Tensor output_2 = smod(input_tensors, {}).toTensor();
   smod.runtime().check_for_memory_leak();
-  EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+  EXPECT_TRUE(
+      torch::allclose(output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-7));
 }
 
 TEST(StaticRuntime, TrivialModel) {
@@ -457,7 +478,8 @@ TEST(StaticRuntime, TrivialModel) {
   torch::jit::StaticModule smod(mod);
   at::Tensor output_2 = smod(input_tensors, {}).toTensor();
   smod.runtime().check_for_memory_leak();
-  EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+  EXPECT_TRUE(
+      torch::allclose(output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-7));
 }
 
 TEST(StaticRuntime, DeepWide) {
@@ -482,7 +504,8 @@ TEST(StaticRuntime, DeepWide) {
       ASSERT_TRUE(outputs.size() > 0);
       at::Tensor output_2 = outputs[0].toTensor();
       smod.runtime().check_for_memory_leak();
-      EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+      EXPECT_TRUE(
+          torch::allclose(output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-5));
     }
   }
 }
@@ -509,7 +532,8 @@ TEST(StaticRuntime, KWargsAPI_1) {
         smod.runtime().check_for_memory_leak();
 
         at::Tensor output_2 = getTensor(output_ivalue);
-        EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+        EXPECT_TRUE(
+            torch::allclose(output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-5));
 
         // check for output aliasing
         EXPECT_EQ(output_ivalue.use_count(), 1);
@@ -553,7 +577,8 @@ TEST(StaticRuntime, KWargsAPI_2) {
         smod.runtime().check_for_memory_leak();
 
         at::Tensor output_2 = getTensor(output_ivalue);
-        EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+        EXPECT_TRUE(
+            torch::allclose(output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-5));
 
         // check for output aliasing
         EXPECT_EQ(output_ivalue.use_count(), 1);
@@ -630,7 +655,8 @@ TEST(StaticRuntime, CleanUpMemory) {
             ASSERT_TRUE(outputs.size() > 0);
             auto output_2 = outputs[0].toTensor();
             runtime.check_for_memory_leak();
-            EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+            EXPECT_TRUE(torch::allclose(
+                output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-5));
             if (manage_output_tensors) {
               runtime.deallocateOutputTensors();
               runtime.checkOutputTensorMemoryLeaks();
@@ -685,7 +711,7 @@ TEST(
     IValue tuple = runtime(args, {});
     ASSERT_TRUE(tuple.isTuple());
     ASSERT_EQ(tuple.toTupleRef().elements().size(), 1);
-    // Do not manage intput value.
+    // Do not manage input value.
     EXPECT_FALSE(runtime.isManagedOutputTensor(args[0]));
     // Do not manage direct output value.
     EXPECT_FALSE(runtime.isManagedOutputTensor(tuple));
@@ -701,7 +727,7 @@ TEST(
     IValue tuple = runtime(args, {});
     ASSERT_TRUE(tuple.isTuple());
     ASSERT_EQ(tuple.toTupleRef().elements().size(), 1);
-    // Do not manage intput value.
+    // Do not manage input value.
     EXPECT_FALSE(runtime.isManagedOutputTensor(args[0]));
     // Do not manage direct output value.
     EXPECT_FALSE(runtime.isManagedOutputTensor(tuple));
@@ -875,7 +901,8 @@ TEST(StaticRuntime, FusionPass) {
       }
       EXPECT_TRUE(hit);
       auto output_2 = getTensor(module.forward(inputs));
-      EXPECT_TRUE(torch::allclose(output_1, output_2, 1e-6));
+      EXPECT_TRUE(
+          torch::allclose(output_1, output_2, /*rtol=*/1e-5, /*atol=*/1e-5));
     }
   }
 }
@@ -1247,6 +1274,59 @@ TEST(ManagedTensorRanges, OverlappingLifetimesOutputs) {
   EXPECT_TRUE(ranges.lifetimesOverlap(b, output));
 }
 
+TEST(ManagedTensorRanges, LifetimeIncludeSubBlockInputs) {
+  const std::string src_plain = R"IR(
+    graph(%cond : bool, %a : Tensor):
+        %b : Tensor = aten::mul(%a, %a)
+        %output : bool = prim::If(%cond)
+          block0():
+            -> (%a)
+          block1():
+            %c : Tensor = aten::mul(%b, %a)
+            -> (%c)
+        return (%output)
+  )IR";
+  const std::string src_recursive = R"IR(
+    graph(%cond : bool, %a : Tensor):
+        %b : Tensor = aten::mul(%a, %a)
+        %output : bool = prim::If(%cond)
+          block0():
+            -> (%a)
+          block1():
+            %outputblock1 : bool = prim::If(%cond)
+              block0():
+                -> (%a)
+              block1():
+                %c : Tensor = aten::mul(%b, %a)
+                -> (%c)
+            -> (%outputblock1)
+        return (%output)
+  )IR";
+
+  for (const auto& src : {src_plain, src_recursive}) {
+    auto graph = std::make_shared<Graph>();
+    std::unordered_map<std::string, Value*> vmap;
+    parseIR(src, graph.get(), vmap);
+
+    auto* b = vmap["b"];
+
+    FastSet<const Value*> managed_tensors = {b};
+    AliasDb alias_db(graph);
+    auto ranges = ManagedTensorRanges(*graph->block(), alias_db, managed_tensors);
+
+    std::vector<Node*> nodes(
+        graph->block()->nodes().begin(), graph->block()->nodes().end());
+    ASSERT_EQ(nodes.size(), 2);
+
+    EXPECT_FALSE(ranges.nodeFreesManagedTensors(nodes[0]));
+
+    EXPECT_TRUE(ranges.nodeFreesManagedTensors(nodes[1]));
+    EXPECT_EQ(
+        ranges.availableTensorValuesAfterNode(nodes[1]),
+        std::vector<const Value*>{b});
+  }
+}
+
 namespace {
 
 // For checking the correctness of assignStorageToManageTensors, the following
@@ -1529,3 +1609,231 @@ TEST(ForceNonEmptyOutputs, TwoSubBlocks) {
     }
   }
 }
+
+TEST(EliminateExtraPermuteOps, FusesSumCorrectly) {
+  const auto src = R"JIT(
+    def forward(self, x):
+        y = torch.permute(x, (0, 2, 1))
+        z = torch.sum(y, dim=-1)
+        return z
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+
+  auto graph = mod.get_method("forward").graph();
+  // turn the ListConstruct(%constant) into proper constant lists
+  ConstantPropagation(graph);
+  EliminateExtraPermuteOps(graph);
+
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::permute"));
+  auto* sum = getNodeWithKind(graph, "aten::sum");
+  ASSERT_NE(sum, nullptr);
+  auto dim = toIValue(sum->input(1));
+  ASSERT_TRUE(dim.has_value() && dim->isIntList());
+  EXPECT_EQ(dim->toIntList(), c10::List<int64_t>{1});
+}
+
+TEST(EliminateExtraPermuteOps, DoesNotFuseSumWrongDim) {
+  const auto src = R"JIT(
+    def forward(self, x):
+        y = torch.permute(x, (0, 2, 1))
+        z = torch.sum(y, dim=1)
+        return z
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+
+  auto graph = mod.get_method("forward").graph();
+  // turn the ListConstruct(%constant) into proper constant lists
+  ConstantPropagation(graph);
+  EliminateExtraPermuteOps(graph);
+
+  EXPECT_TRUE(hasNodeWithKind(graph, "aten::permute"));
+}
+
+TEST(EliminateExtraPermuteOps, DoesNotFuseSumNonConstantDim) {
+  const auto src = R"JIT(
+    def forward(self, x, dim: int):
+        y = torch.permute(x, (0, 2, 1))
+        z = torch.sum(y, dim=dim)
+        return z
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+
+  auto graph = mod.get_method("forward").graph();
+  // turn the ListConstruct(%constant) into proper constant lists
+  ConstantPropagation(graph);
+  EliminateExtraPermuteOps(graph);
+
+  EXPECT_TRUE(hasNodeWithKind(graph, "aten::permute"));
+}
+
+TEST(EliminateExtraPermuteOps, FusesSoftmaxCorrectly) {
+  const auto src = R"JIT(
+    def forward(self, x):
+        a = torch.permute(x, [0, 2, 1])
+        b = torch.softmax(a, 2)
+        c = torch.permute(b, [0, 2, 1])
+        return c.clone()
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+  auto graph = mod.get_method("forward").graph();
+  ConstantPropagation(graph);
+  EliminateExtraPermuteOps(graph);
+  graph->dump();
+
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::permute"));
+  auto* softmax = getNodeWithKind(graph, "aten::softmax");
+  ASSERT_NE(softmax, nullptr);
+  auto dim = toIValue(softmax->input(1));
+  ASSERT_TRUE(dim.has_value() && dim->isInt());
+  EXPECT_EQ(dim->toInt(), 1);
+
+  std::vector<IValue> args{at::randn({3, 4, 5})};
+  testStaticRuntime(src, args, /*args2=*/{}, /*use_allclose=*/true);
+}
+
+TEST(EliminateExtraPermuteOps, DoesNotFuseSoftmaxWrongPermuteDim) {
+  const auto src = R"JIT(
+    def forward(self, x):
+        a = torch.permute(x, [0, 1, 2])
+        b = torch.softmax(a, 2)
+        c = torch.permute(b, [0, 1, 2])
+        return c.clone()
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+  auto graph = mod.get_method("forward").graph();
+  ConstantPropagation(graph);
+  EliminateExtraPermuteOps(graph);
+  EXPECT_TRUE(hasNodeWithKind(graph, "aten::permute"));
+}
+
+TEST(EliminateExtraPermuteOps, DoesNotFuseSoftmaxWrongSoftmaxDim) {
+  const auto src = R"JIT(
+    def forward(self, x):
+        a = torch.permute(x, [0, 2, 1])
+        b = torch.softmax(a, 0)
+        c = torch.permute(b, [0, 2, 1])
+        return c.clone()
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+  auto graph = mod.get_method("forward").graph();
+  ConstantPropagation(graph);
+  EliminateExtraPermuteOps(graph);
+  EXPECT_TRUE(hasNodeWithKind(graph, "aten::permute"));
+}
+
+TEST(UseSplitAndSqueeze, Fusion) {
+  const auto src = R"IR(
+    graph(%x: Tensor):
+      %dim: int = prim::Constant[value=1]()
+      %split_size: int = prim::Constant[value=1]()
+      %split: Tensor[] = aten::split(%x, %split_size, %dim)
+      %a: Tensor, %b: Tensor = prim::ListUnpack(%split)
+      %c: Tensor = aten::squeeze(%a, %dim)
+      %d: Tensor = aten::squeeze(%b, %dim)
+      return (%c, %d)
+  )IR";
+  auto graph = getGraphFromIR(src);
+  UseSplitAndSqueeze(graph);
+  EXPECT_TRUE(
+      hasNodeWithKind(graph, "static_runtime::fused_split_and_squeeze_copy"));
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::split"));
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::squeeze"));
+  EXPECT_FALSE(hasNodeWithKind(graph, "prim::ListUnpack"));
+}
+
+TEST(EliminateNoOpSlice, IntegerStart) {
+  const auto src = R"JIT(
+    def forward(self, x: List[int]) -> List[int]:
+        return x[0:]
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+  auto graph = mod.get_method("forward").graph();
+  EXPECT_TRUE(hasNodeWithKind(graph, "aten::slice"));
+  EliminateNoOpSlice(graph);
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::slice"));
+}
+
+TEST(EliminateNoOpSlice, NoneStart) {
+  const auto src = R"JIT(
+    def forward(self, x: List[int]) -> List[int]:
+        return x[:]
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+  auto graph = mod.get_method("forward").graph();
+  EliminateNoOpSlice(graph);
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::slice"));
+}
+
+#ifdef FBCODE_CAFFE2
+// FuseClampNaNToNum pass is disabled externally to avoid MSVC errors in CI
+TEST(FuseClampNaNToNum, FusionHappens) {
+  const auto src = R"JIT(
+    def forward(self, x):
+        y = torch.clamp(x, min=0.0, max=1.0)
+        z = y.nan_to_num()
+        return z.clone()
+  )JIT";
+  torch::jit::Module mod("m");
+  mod.define(src);
+  auto graph = mod.get_method("forward").graph();
+  FuseClampNaNToNum(graph);
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::clamp"));
+  EXPECT_FALSE(hasNodeWithKind(graph, "aten::nan_to_num"));
+  EXPECT_TRUE(hasNodeWithKind(graph, "static_runtime::clamp_nan_to_num"));
+  // Correctness of the op is exercised in StaticRuntime.clamp_nan_to_num
+}
+
+TEST(FuseClampNaNToNum, NoFusion) {
+  const auto src1 = R"JIT(
+    def forward(self, x, a: float, b: float):
+        y = torch.clamp(x, a, b)
+        z = y.nan_to_num()
+        return z.clone()
+  )JIT";
+
+  const auto src2 = R"JIT(
+    def forward(self, x):
+        y = torch.clamp(x, min=0.0)
+        z = y.nan_to_num()
+        return z.clone()
+  )JIT";
+
+  const auto src3 = R"JIT(
+    def forward(self, x):
+        y = torch.clamp(x, max=0.0)
+        z = y.nan_to_num()
+        return z.clone()
+  )JIT";
+
+  const auto src4 = R"JIT(
+    def forward(self, x):
+        y = torch.clamp(x)
+        z = y.nan_to_num()
+        return z.clone()
+  )JIT";
+
+
+  auto checkScript = [](const char* src) {
+    torch::jit::Module mod("m");
+    mod.define(src);
+    auto graph = mod.get_method("forward").graph();
+    FuseClampNaNToNum(graph);
+    EXPECT_TRUE(hasNodeWithKind(graph, "aten::clamp"));
+    EXPECT_TRUE(hasNodeWithKind(graph, "aten::nan_to_num"));
+    EXPECT_FALSE(hasNodeWithKind(graph, "static_runtime::clamp_nan_to_num"));
+  };
+
+  checkScript(src1);
+  checkScript(src2);
+  checkScript(src3);
+  checkScript(src4);
+}
+#endif

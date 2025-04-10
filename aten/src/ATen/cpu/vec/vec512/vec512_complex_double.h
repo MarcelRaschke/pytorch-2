@@ -7,16 +7,17 @@
 #include <c10/util/irange.h>
 #include <ATen/cpu/vec/intrinsics.h>
 #include <ATen/cpu/vec/vec_base.h>
-#if defined(CPU_CAPABILITY_AVX512) && !defined(_MSC_VER)
+#if defined(CPU_CAPABILITY_AVX512)
+#define SLEEF_STATIC_LIBS
 #include <sleef.h>
 #endif
 
-namespace at {
-namespace vec {
+
+namespace at::vec {
 // See Note [CPU_CAPABILITY namespace]
 inline namespace CPU_CAPABILITY {
 
-#if defined(CPU_CAPABILITY_AVX512) && !defined(_MSC_VER)
+#if defined(CPU_CAPABILITY_AVX512)
 
 template <> class Vectorized<c10::complex<double>> {
 private:
@@ -174,7 +175,10 @@ public:
     return hadd_pd(val_2, val_2);            // a*a+b*b a*a+b*b
   }
   __m512d abs_() const {
-    return _mm512_sqrt_pd(abs_2_());                // abs     abs
+    auto real = _mm512_movedup_pd(values);        // real real
+    // movehdup_pd does not exist...
+    auto imag = _mm512_permute_pd(values, 0xff);  // imag imag
+    return Sleef_hypotd8_u05(real, imag);         // abs  abs
   }
   Vectorized<c10::complex<double>> abs() const {
     const __m512d real_mask = _mm512_castsi512_pd(_mm512_setr_epi64(0xFFFFFFFFFFFFFFFF, 0x0000000000000000,
@@ -200,13 +204,8 @@ public:
     auto abs = abs_();
     auto zero = _mm512_setzero_pd();
     auto mask = _mm512_cmp_pd_mask(abs, zero, _CMP_EQ_OQ);
-    auto mask_vec = _mm512_mask_set1_epi64(_mm512_castpd_si512(zero), mask,
-                                          0xFFFFFFFFFFFFFFFF);
-    auto abs_val = Vectorized(abs);
-
-    auto div = values / abs_val.values;       // x / abs(x)
-
-    return blendv(div, zero, _mm512_castsi512_pd(mask_vec));
+    auto div = _mm512_div_pd(values, abs);
+    return _mm512_mask_blend_pd(mask, div, zero);
   }
   __m512d real_() const {
     const __m512d real_mask = _mm512_castsi512_pd(_mm512_setr_epi64(0xFFFFFFFFFFFFFFFF, 0x0000000000000000,
@@ -248,27 +247,29 @@ public:
     return _mm512_div_pd(log(), log10_);
   }
   Vectorized<c10::complex<double>> log1p() const {
-    AT_ERROR("not supported for complex numbers");
+    return map(std::log1p);
   }
   Vectorized<c10::complex<double>> asin() const {
-    // asin(x)
-    // = -i*ln(iz + sqrt(1 -z^2))
-    // = -i*ln((ai - b) + sqrt(1 - (a + bi)*(a + bi)))
-    // = -i*ln((-b + ai) + sqrt(1 - (a**2 - b**2) - 2*abi))
-    const __m512d one = _mm512_set1_pd(1);
+    // TODO: The vectorized implementation requires special handling for the case where real number/imag number is 0/Inf/NaN.
+    // // asin(x)
+    // // = -i*ln(iz + sqrt(1 -z^2))
+    // // = -i*ln((ai - b) + sqrt(1 - (a + bi)*(a + bi)))
+    // // = -i*ln((-b + ai) + sqrt(1 - (a**2 - b**2) - 2*abi))
+    // const __m512d one = _mm512_set1_pd(1);
 
-    auto conj = conj_();
-    auto b_a = _mm512_permute_pd(conj, 0x55);                         //-b        a
-    auto ab = _mm512_mul_pd(conj, b_a);                               //-ab       -ab
-    auto im = _mm512_add_pd(ab, ab);                                  //-2ab      -2ab
+    // auto conj = conj_();
+    // auto b_a = _mm512_permute_pd(conj, 0x55);                         //-b        a
+    // auto ab = _mm512_mul_pd(conj, b_a);                               //-ab       -ab
+    // auto im = _mm512_add_pd(ab, ab);                                  //-2ab      -2ab
 
-    auto val_2 = _mm512_mul_pd(values, values);                       // a*a      b*b
-    auto re = hsub_pd(val_2, _mm512_permute_pd(val_2, 0x55));  // a*a-b*b  b*b-a*a
-    re = _mm512_sub_pd(one, re);
+    // auto val_2 = _mm512_mul_pd(values, values);                       // a*a      b*b
+    // auto re = hsub_pd(val_2, _mm512_permute_pd(val_2, 0x55));  // a*a-b*b  b*b-a*a
+    // re = _mm512_sub_pd(one, re);
 
-    auto root = Vectorized(_mm512_mask_blend_pd(0xAA, re, im)).sqrt();         //sqrt(re + i*im)
-    auto ln = Vectorized(_mm512_add_pd(b_a, root)).log();                 //ln(iz + sqrt())
-    return Vectorized(_mm512_permute_pd(ln.values, 0x55)).conj();         //-i*ln()
+    // auto root = Vectorized(_mm512_mask_blend_pd(0xAA, re, im)).sqrt();         //sqrt(re + i*im)
+    // auto ln = Vectorized(_mm512_add_pd(b_a, root)).log();                 //ln(iz + sqrt())
+    // return Vectorized(_mm512_permute_pd(ln.values, 0x55)).conj();         //-i*ln()
+    return map(std::asin);
   }
   Vectorized<c10::complex<double>> acos() const {
     // acos(x) = pi/2 - asin(x)
@@ -277,28 +278,30 @@ public:
     return _mm512_sub_pd(pi_2, asin());
   }
   Vectorized<c10::complex<double>> atan() const;
-  Vectorized<c10::complex<double>> atan2(const Vectorized<c10::complex<double>> &b) const {
-    AT_ERROR("not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> erf() const {
-    AT_ERROR("not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> erfc() const {
-    AT_ERROR("not supported for complex numbers");
+  Vectorized<c10::complex<double>> atanh() const {
+    return map(std::atanh);
   }
   Vectorized<c10::complex<double>> exp() const {
-    //exp(a + bi)
-    // = exp(a)*(cos(b) + sin(b)i)
-    auto exp = Sleef_expd8_u10(values);                               //exp(a)           exp(b)
-    exp = _mm512_mask_blend_pd(0xAA, exp, _mm512_permute_pd(exp, 0x55));   //exp(a)           exp(a)
+    // TODO: The vectorized implementation requires special handling for the case where real number/imag number is 0/Inf/NaN.
+    // //exp(a + bi)
+    // // = exp(a)*(cos(b) + sin(b)i)
+    // auto exp = Sleef_expd8_u10(values);                               //exp(a)           exp(b)
+    // exp = _mm512_mask_blend_pd(0xAA, exp, _mm512_permute_pd(exp, 0x55));   //exp(a)           exp(a)
 
-    auto sin_cos = Sleef_sincosd8_u10(values);                        //[sin(a), cos(a)] [sin(b), cos(b)]
-    auto cos_sin = _mm512_mask_blend_pd(0xAA, _mm512_permute_pd(sin_cos.y, 0x55),
-                                   sin_cos.x);                  //cos(b)           sin(b)
-    return _mm512_mul_pd(exp, cos_sin);
+    // auto sin_cos = Sleef_sincosd8_u10(values);                        //[sin(a), cos(a)] [sin(b), cos(b)]
+    // auto cos_sin = _mm512_mask_blend_pd(0xAA, _mm512_permute_pd(sin_cos.y, 0x55),
+    //                                sin_cos.x);                  //cos(b)           sin(b)
+    // return _mm512_mul_pd(exp, cos_sin);
+    return map(std::exp);
+  }
+  Vectorized<c10::complex<double>> exp2() const {
+    // Use identity 2**x = exp(log(2) * x)
+    const __m512d ln_2 = _mm512_set1_pd(c10::ln_2<double>);
+    Vectorized<c10::complex<double>> scaled_values = _mm512_mul_pd(values, ln_2);
+    return scaled_values.exp();
   }
   Vectorized<c10::complex<double>> expm1() const {
-    AT_ERROR("not supported for complex numbers");
+    return map(std::expm1);
   }
   Vectorized<c10::complex<double>> sin() const {
     return map(std::sin);
@@ -318,21 +321,9 @@ public:
   Vectorized<c10::complex<double>> floor() const {
     return _mm512_floor_pd(values);
   }
-  Vectorized<c10::complex<double>> hypot(const Vectorized<c10::complex<double>> &b) const {
-    AT_ERROR("not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> igamma(const Vectorized<c10::complex<double>> &x) const {
-    AT_ERROR("not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> igammac(const Vectorized<c10::complex<double>> &x) const {
-    AT_ERROR("not supported for complex numbers");
-  }
   Vectorized<c10::complex<double>> neg() const {
     auto zero = _mm512_setzero_pd();
     return _mm512_sub_pd(zero, values);
-  }
-  Vectorized<c10::complex<double>> nextafter(const Vectorized<c10::complex<double>> &b) const {
-    AT_ERROR("not supported for complex numbers");
   }
   Vectorized<c10::complex<double>> round() const {
     return _mm512_roundscale_pd(values, (_MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
@@ -372,37 +363,25 @@ public:
                                                       0xFFFFFFFFFFFFFFFF));
   }
   Vectorized<c10::complex<double>> operator!=(const Vectorized<c10::complex<double>>& other) const {
-    auto mask = _mm512_cmp_pd_mask(values, other.values, _CMP_NEQ_OQ);
+    auto mask = _mm512_cmp_pd_mask(values, other.values, _CMP_NEQ_UQ);
     return _mm512_castsi512_pd(_mm512_mask_set1_epi64(zero_vector, mask,
                                                       0xFFFFFFFFFFFFFFFF));
   }
-  Vectorized<c10::complex<double>> operator<(const Vectorized<c10::complex<double>>& other) const {
+  Vectorized<c10::complex<double>> operator<(const Vectorized<c10::complex<double>>& other [[maybe_unused]]) const {
     TORCH_CHECK(false, "not supported for complex numbers");
   }
-  Vectorized<c10::complex<double>> operator<=(const Vectorized<c10::complex<double>>& other) const {
+  Vectorized<c10::complex<double>> operator<=(const Vectorized<c10::complex<double>>& other [[maybe_unused]]) const {
     TORCH_CHECK(false, "not supported for complex numbers");
   }
-  Vectorized<c10::complex<double>> operator>(const Vectorized<c10::complex<double>>& other) const {
+  Vectorized<c10::complex<double>> operator>(const Vectorized<c10::complex<double>>& other [[maybe_unused]]) const {
     TORCH_CHECK(false, "not supported for complex numbers");
   }
-  Vectorized<c10::complex<double>> operator>=(const Vectorized<c10::complex<double>>& other) const {
+  Vectorized<c10::complex<double>> operator>=(const Vectorized<c10::complex<double>>& other [[maybe_unused]]) const {
     TORCH_CHECK(false, "not supported for complex numbers");
   }
 
   Vectorized<c10::complex<double>> eq(const Vectorized<c10::complex<double>>& other) const;
   Vectorized<c10::complex<double>> ne(const Vectorized<c10::complex<double>>& other) const;
-  Vectorized<c10::complex<double>> lt(const Vectorized<c10::complex<double>>& other) const {
-    TORCH_CHECK(false, "not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> le(const Vectorized<c10::complex<double>>& other) const {
-    TORCH_CHECK(false, "not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> gt(const Vectorized<c10::complex<double>>& other) const {
-    TORCH_CHECK(false, "not supported for complex numbers");
-  }
-  Vectorized<c10::complex<double>> ge(const Vectorized<c10::complex<double>>& other) const {
-    TORCH_CHECK(false, "not supported for complex numbers");
-  }
 };
 
 template <> Vectorized<c10::complex<double>> inline operator+(const Vectorized<c10::complex<double>> &a,
@@ -431,39 +410,65 @@ template <> Vectorized<c10::complex<double>> inline operator*(const Vectorized<c
 
 template <> Vectorized<c10::complex<double>> inline operator/(const Vectorized<c10::complex<double>> &a,
                                                              const Vectorized<c10::complex<double>> &b) {
-  //re + im*i = (a + bi)  / (c + di)
-  //re = (ac + bd)/abs_2()
-  //im = (bc - ad)/abs_2()
-  const __m512d sign_mask = _mm512_setr_pd(-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0);
-  auto ac_bd = _mm512_mul_pd(a, b);         //ac       bd
+  // TODO: The vectorized implementation requires special handling for the case where real number/imag number is 0/Inf/NaN.
+  // //re + im*i = (a + bi)  / (c + di)
+  // auto mask = _mm512_set1_pd(-0.f);
+  // auto fabs_cd = _mm512_andnot_pd(mask, b);     // |c|    |d|
+  // auto fabs_dc = _mm512_permute_pd(fabs_cd, 0x55);   // |d|    |c|
+  // auto scale = _mm512_rcp14_pd(_mm512_max_pd(fabs_cd, fabs_dc));  // 1/sc     1/sc
+  // auto a2 = _mm512_mul_pd(a, scale);         // a/sc     b/sc
+  // auto b2 = _mm512_mul_pd(b, scale);         // c/sc     d/sc
+  // auto acbd2 = _mm512_mul_pd(a2, b2);
 
-  auto d_c = _mm512_permute_pd(b, 0x55);    //d        c
-  d_c = _mm512_xor_pd(sign_mask, d_c);      //-d       c
-  auto ad_bc = _mm512_mul_pd(a, d_c);       //-ad      bc
+  // const __m512d sign_mask = _mm512_setr_pd(-0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0);
+  // auto dc2 = _mm512_permute_pd(b2, 0x55);    // d/sc         c/sc
+  // dc2 = _mm512_xor_pd(sign_mask, dc2);       // -d/|c,d|        c/sc
+  // auto adbc2 = _mm512_mul_pd(a2, dc2);       //-ad/sc^2      bc/sc^2
+  // auto res2 = Vectorized<c10::complex<double>>::hadd_pd(acbd2, adbc2);  //(ac+bd)/sc^2  (bc-ad)/sc^2
 
-  auto re_im = Vectorized<c10::complex<double>>::hadd_pd(ac_bd, ad_bc);//ac + bd  bc - ad
-  return _mm512_div_pd(re_im, b.abs_2_());
+  // // get the denominator
+  // auto denom2 = Vectorized<c10::complex<double>>(b2).abs_2_();  // (c^2+d^2)/sc^2   (c^2+d^2)/sc^2
+  // res2 = _mm512_div_pd(res2, denom2);
+  // return res2;
+  __at_align__ c10::complex<double> tmp1[Vectorized<c10::complex<double>>::size()];
+  __at_align__ c10::complex<double> tmp2[Vectorized<c10::complex<double>>::size()];
+  __at_align__ c10::complex<double> out[Vectorized<c10::complex<double>>::size()];
+  a.store(tmp1);
+  b.store(tmp2);
+  for (const auto i : c10::irange(Vectorized<c10::complex<double>>::size())) {
+    out[i] = tmp1[i] / tmp2[i];
+  }
+  return _mm512_loadu_pd(reinterpret_cast<const double*>(out));
 }
 
 // reciprocal. Implement this here so we can use multiplication.
 inline Vectorized<c10::complex<double>> Vectorized<c10::complex<double>>::reciprocal() const{
-  //re + im*i = (a + bi)  / (c + di)
-  //re = (ac + bd)/abs_2() = c/abs_2()
-  //im = (bc - ad)/abs_2() = d/abs_2()
-  const __m512d sign_mask = _mm512_setr_pd(0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0);
-  auto c_d = _mm512_xor_pd(sign_mask, values);    //c       -d
-  return _mm512_div_pd(c_d, abs_2_());
+  // TODO: The vectorized implementation requires special handling for the case where real number/imag number is 0/Inf/NaN.
+  // //re + im*i = (a + bi)  / (c + di)
+  // //re = (ac + bd)/abs_2() = c/abs_2()
+  // //im = (bc - ad)/abs_2() = d/abs_2()
+  // const __m512d sign_mask = _mm512_setr_pd(0.0, -0.0, 0.0, -0.0, 0.0, -0.0, 0.0, -0.0);
+  // auto c_d = _mm512_xor_pd(sign_mask, values);    //c       -d
+  // return _mm512_div_pd(c_d, abs_2_());
+  __at_align__ c10::complex<double> tmp[size()];
+  store(tmp);
+  for (const auto i : c10::irange(size())) {
+    tmp[i] = c10::complex<double>(1) / tmp[i];
+  }
+  return loadu(tmp);
 }
 
 inline Vectorized<c10::complex<double>> Vectorized<c10::complex<double>>::atan() const {
-  // atan(x) = i/2 * ln((i + z)/(i - z))
-  const __m512d i = _mm512_setr_pd(0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
-  const Vectorized i_half = _mm512_setr_pd(0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5);
+  // TODO: The vectorized implementation requires special handling for the case where real number/imag number is 0/Inf/NaN.
+  // // atan(x) = i/2 * ln((i + z)/(i - z))
+  // const __m512d i = _mm512_setr_pd(0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
+  // const Vectorized i_half = _mm512_setr_pd(0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5);
 
-  auto sum = Vectorized(_mm512_add_pd(i, values));                      // a        1+b
-  auto sub = Vectorized(_mm512_sub_pd(i, values));                      // -a       1-b
-  auto ln = (sum/sub).log();                                        // ln((i + z)/(i - z))
-  return i_half*ln;                                                 // i/2*ln()
+  // auto sum = Vectorized(_mm512_add_pd(i, values));                      // a        1+b
+  // auto sub = Vectorized(_mm512_sub_pd(i, values));                      // -a       1-b
+  // auto ln = (sum/sub).log();                                        // ln((i + z)/(i - z))
+  // return i_half*ln;                                                 // i/2*ln()
+  return map(std::atan);
 }
 
 template <>
@@ -515,13 +520,17 @@ Vectorized<c10::complex<double>> inline operator^(const Vectorized<c10::complex<
 }
 
 inline Vectorized<c10::complex<double>> Vectorized<c10::complex<double>>::eq(const Vectorized<c10::complex<double>>& other) const {
-  return (*this == other) & Vectorized<c10::complex<double>>(_mm512_set1_pd(1.0));
+  auto eq = (*this == other);  // compares real and imag individually
+  // If both real numbers and imag numbers are equal, then the complex numbers are equal
+  return (eq.real() & eq.imag()) & Vectorized<c10::complex<double>>(_mm512_set1_pd(1.0));
 }
 
 inline Vectorized<c10::complex<double>> Vectorized<c10::complex<double>>::ne(const Vectorized<c10::complex<double>>& other) const {
-  return (*this != other) & Vectorized<c10::complex<double>>(_mm512_set1_pd(1.0));
+  auto ne = (*this != other);  // compares real and imag individually
+  // If either real numbers or imag numbers are not equal, then the complex numbers are not equal
+  return (ne.real() | ne.imag()) & Vectorized<c10::complex<double>>(_mm512_set1_pd(1.0));
 }
 
 #endif
 
-}}}
+}}

@@ -7,8 +7,7 @@
 // EDITING THIS FILE? READ THIS FIRST!
 // see Note [Edit Pattern Encapsulation] in pattern_encapsulation.h
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -33,7 +32,7 @@ Node* EncapsulateInplaceIndexPutForONNX(Node* index_put_node) {
   // select operator(0).
   std::vector<Node*> slice_and_select_nodes =
       IndexingPatternFinder::FetchSliceAndSelect(index_put_node);
-  Node* last_node = slice_and_select_nodes.size() > 0
+  Node* last_node = !slice_and_select_nodes.empty()
       ? slice_and_select_nodes.back()
       : index_put_node;
   Value* orig_data = last_node->input(0);
@@ -77,15 +76,14 @@ Node* EncapsulateInplaceIndexPutForONNX(Node* index_put_node) {
 
 } // namespace
 
-c10::optional<Node*> EncapsulatePatternIntoSubblock(Node* n) {
+std::optional<Node*> EncapsulatePatternIntoSubblock(Node* n) {
   switch (n->kind()) {
     case aten::index_put_:
     case aten::index_put: {
       return EncapsulateInplaceIndexPutForONNX(n);
     }
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

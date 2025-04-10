@@ -2,26 +2,25 @@
 #include <c10/util/irange.h>
 
 #include <ATen/cuda/CUDAContext.h>
-#include <c10d/FileStore.hpp>
-#include <c10d/ProcessGroupGloo.hpp>
+#include <gtest/gtest.h>
+#include <torch/csrc/distributed/c10d/FileStore.hpp>
+#include <torch/csrc/distributed/c10d/ProcessGroupGloo.hpp>
 #include "CUDATest.hpp"
 #include "TestUtils.hpp"
-#include <gtest/gtest.h>
 
 using namespace c10d::test;
 
 using at::cuda::CUDAStream;
-using c10d::ProcessGroup;
 
 template <typename T, typename... Args>
-std::vector<T> initialize(const std::string& path, int N, Args&&... args) {
+std::vector<T> initialize(const std::string& path, size_t N, Args&&... args) {
   std::vector<T> tests;
-  for (C10_UNUSED const auto i : c10::irange(N)) {
+  for ([[maybe_unused]] const auto i : c10::irange(N)) {
     tests.push_back(std::move(T(path, std::forward<Args>(args)...)));
   }
 
   std::vector<std::thread> threads;
-  for (C10_UNUSED const auto i : c10::irange(N)) {
+  for ([[maybe_unused]] const auto i : c10::irange(N)) {
     threads.push_back(std::thread([i, N, &tests] { tests[i].start(i, N); }));
   }
 
@@ -36,10 +35,7 @@ class AsyncTest {
  public:
   AsyncTest(std::string path) : path_(std::move(path)) {}
 
-  AsyncTest(AsyncTest&& other) {
-    path_ = std::move(other.path_);
-    pg_ = std::move(other.pg_);
-  }
+  AsyncTest(AsyncTest&& other) noexcept = default;
 
   ::c10d::ProcessGroupGloo& getProcessGroup() {
     return *pg_;
@@ -54,8 +50,8 @@ class AsyncTest {
     options->devices.push_back(
         ::c10d::ProcessGroupGloo::createDeviceForHostname("127.0.0.1"));
 
-    pg_ = std::unique_ptr<::c10d::ProcessGroupGloo>(
-        new ::c10d::ProcessGroupGloo(store, rank, size, options));
+    pg_ =
+        std::make_unique<::c10d::ProcessGroupGloo>(store, rank, size, options);
   }
 
  protected:
@@ -70,7 +66,7 @@ class AsyncInputIsOutputTest : public AsyncTest {
         numTensors_(numTensors),
         numDevices_(cudaNumDevices()) {
     // Allocate inputs on available devices in a round robin fashion.
-    ::at::globalContext().lazyInitCUDA();
+    ::at::globalContext().lazyInitDevice(c10::DeviceType::CUDA);
     inputs_.resize(numTensors_);
     for (const auto i : c10::irange(numTensors_)) {
       inputs_[i] = at::empty(
@@ -89,17 +85,18 @@ class AsyncInputIsOutputTest : public AsyncTest {
     at::cuda::OptionalCUDAGuard deviceGuard;
     streams_.reserve(numDevices_);
     for (const auto i : c10::irange(numDevices_)) {
-      deviceGuard.set_index(i);
+      deviceGuard.set_index(static_cast<c10::DeviceIndex>(i));
       streams_.push_back(at::cuda::getStreamFromPool());
     }
   }
 
-  void wait(c10::intrusive_ptr<ProcessGroup::Work>& work) {
+  void wait(c10::intrusive_ptr<c10d::Work>& work) {
     c10::cuda::CUDAMultiStreamGuard guard(streams_);
     work->wait();
   }
 
-  std::vector<at::Tensor> getCpuTensors(const std::vector<at::Tensor>& gpu_tensors) {
+  std::vector<at::Tensor> getCpuTensors(
+      const std::vector<at::Tensor>& gpu_tensors) {
     std::vector<at::Tensor> outputs(gpu_tensors.size());
 
     // For the duration of this function, make THC use our streams
@@ -117,9 +114,10 @@ class AsyncInputIsOutputTest : public AsyncTest {
     return getCpuTensors(inputs_);
   }
 
-
  protected:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const int numTensors_;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const int numDevices_;
   std::vector<at::Tensor> inputs_;
   std::vector<CUDAStream> streams_;
@@ -130,20 +128,20 @@ class AsyncAllreduceTest : public AsyncInputIsOutputTest {
   AsyncAllreduceTest(const std::string& path, int numTensors)
       : AsyncInputIsOutputTest(path, numTensors) {}
 
-  c10::intrusive_ptr<c10d::ProcessGroup::Work> run() {
+  c10::intrusive_ptr<c10d::Work> run() {
     // For the duration of this function, make THC use our streams
     c10::cuda::CUDAMultiStreamGuard guard(streams_);
 
     // Launch sleep on every stream
     at::cuda::OptionalCUDAGuard deviceGuard;
     for (const auto i : c10::irange(numDevices_)) {
-      deviceGuard.set_index(i);
-      cudaSleep(streams_[i], 10 * 1000 * 1000);
+      deviceGuard.set_index(static_cast<c10::DeviceIndex>(i));
+      cudaSleep(streams_[i], 10ull * 1000 * 1000);
     }
 
     // Launch value initialization for every tensor
     for (const auto i : c10::irange(numTensors_)) {
-      deviceGuard.set_index(i % numDevices_);
+      deviceGuard.set_index(static_cast<c10::DeviceIndex>(i % numDevices_));
       inputs_[i].fill_(pg_->getRank() * numTensors_ + i);
     }
 
@@ -156,26 +154,26 @@ class AsyncBroadcastTest : public AsyncInputIsOutputTest {
   AsyncBroadcastTest(const std::string& path, int numTensors)
       : AsyncInputIsOutputTest(path, numTensors) {}
 
-  c10::intrusive_ptr<c10d::ProcessGroup::Work> run(int rootRank, int rootTensor) {
+  c10::intrusive_ptr<c10d::Work> run(size_t rootRank, size_t rootTensor) {
     // For the duration of this function, make THC use our streams
     c10::cuda::CUDAMultiStreamGuard guard(streams_);
 
     // Launch sleep on every stream
     at::cuda::OptionalCUDAGuard deviceGuard;
     for (const auto i : c10::irange(numDevices_)) {
-      deviceGuard.set_index(i);
-      cudaSleep(streams_[i], 10 * 1000 * 1000);
+      deviceGuard.set_index(static_cast<c10::DeviceIndex>(i));
+      cudaSleep(streams_[i], 10ull * 1000 * 1000);
     }
 
     // Launch value initialization for every tensor
     for (const auto i : c10::irange(numTensors_)) {
-      deviceGuard.set_index(i % numDevices_);
+      deviceGuard.set_index(static_cast<c10::DeviceIndex>(i % numDevices_));
       inputs_[i].fill_(pg_->getRank() * numTensors_ + i);
     }
 
     ::c10d::BroadcastOptions options;
-    options.rootRank = rootRank;
-    options.rootTensor = rootTensor;
+    options.rootRank = static_cast<int64_t>(rootRank);
+    options.rootTensor = static_cast<int64_t>(rootTensor);
     return pg_->broadcast(inputs_, options);
   }
 };
@@ -185,25 +183,25 @@ void runAsyncAllreduceTest(
     size_t numProcesses = 4,
     size_t numTensors = 2) {
   auto tests = initialize<AsyncAllreduceTest>(path, numProcesses, numTensors);
-  std::vector<c10::intrusive_ptr<c10d::ProcessGroup::Work>> work(numProcesses);
-  for(const auto i : c10::irange(numProcesses)) {
+  std::vector<c10::intrusive_ptr<c10d::Work>> work(numProcesses);
+  for (const auto i : c10::irange(numProcesses)) {
     work[i] = tests[i].run();
   }
 
   // Wait for work to complete
-  for(const auto i : c10::irange(numProcesses)) {
+  for (const auto i : c10::irange(numProcesses)) {
     tests[i].wait(work[i]);
   }
 
   // Check results
-  for(const auto i : c10::irange(numProcesses)) {
+  for (const auto i : c10::irange(numProcesses)) {
     const auto size = numProcesses * numTensors;
     const auto expected = (size * (size - 1)) / 2;
     auto tensors = tests[i].getTensors();
     auto results = tests[i].getCpuTensors(work[i]->result());
     EXPECT_EQ(tensors.size(), results.size());
 
-    for(const auto j : c10::irange(tensors.size())) {
+    for (const auto j : c10::irange(tensors.size())) {
       auto& tensor = tensors[j];
       auto data = tensor.data_ptr<float>();
 
@@ -227,24 +225,24 @@ void runAsyncBroadcastTest(
   auto tests = initialize<AsyncBroadcastTest>(path, numProcesses, numTensors);
 
   // Try every permutation of root rank and root tensor
-  for(const auto rootRank : c10::irange(numProcesses)) {
-    for(const auto rootTensor : c10::irange(numTensors)) {
-      std::vector<c10::intrusive_ptr<c10d::ProcessGroup::Work>> work(numProcesses);
-      for(const auto i : c10::irange(numProcesses)) {
+  for (const auto rootRank : c10::irange(numProcesses)) {
+    for (const auto rootTensor : c10::irange(numTensors)) {
+      std::vector<c10::intrusive_ptr<c10d::Work>> work(numProcesses);
+      for (const auto i : c10::irange(numProcesses)) {
         work[i] = tests[i].run(rootRank, rootTensor);
       }
 
       // Wait for work to complete
-      for(const auto i : c10::irange(numProcesses)) {
+      for (const auto i : c10::irange(numProcesses)) {
         tests[i].wait(work[i]);
       }
 
       // Check results
       const auto expected = (rootRank * numTensors + rootTensor);
-      for(const auto i : c10::irange(numProcesses)) {
+      for (const auto i : c10::irange(numProcesses)) {
         auto tensors = tests[i].getTensors();
-        for (const auto & tensor : tensors) {
-          const auto *const data = tensor.data_ptr<float>();
+        for (const auto& tensor : tensors) {
+          const auto* const data = tensor.const_data_ptr<float>();
           for (const auto k : c10::irange(tensor.numel())) {
             EXPECT_EQ(data[k], expected);
           }

@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 """Example of Timer and Compare APIs:
 
 $ python -m examples.sparse.compare
@@ -11,7 +12,7 @@ import torch
 import torch.utils.benchmark as benchmark_utils
 
 
-class FauxTorch(object):
+class FauxTorch:
     """Emulate different versions of pytorch.
 
     In normal circumstances this would be done with multiple processes

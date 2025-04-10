@@ -5,8 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // this flag is used to make sure the elements in the version map
 // are sorted according to when the upgraders are introduced.
@@ -36,26 +35,50 @@ static std::unordered_map<std::string, std::vector<UpgraderEntry>> operatorVersi
       {{4,
         "div_Tensor_0_3",
         "aten::div.Tensor(Tensor self, Tensor other) -> Tensor"}}},
+     {"aten::div.Tensor_mode",
+      {{4,
+        "div_Tensor_mode_0_3",
+        "aten::div.Tensor_mode(Tensor self, Tensor other, *, str? rounding_mode) -> Tensor"}}},
      {"aten::div.Scalar",
       {{4,
         "div_Scalar_0_3",
         "aten::div.Scalar(Tensor self, Scalar other) -> Tensor"}}},
+     {"aten::div.Scalar_mode",
+      {{4,
+        "div_Scalar_mode_0_3",
+        "aten::div.Scalar_mode(Tensor self, Scalar other, *, str? rounding_mode) -> Tensor"}}},
      {"aten::div.out",
       {{4,
         "div_out_0_3",
         "aten::div.out(Tensor self, Tensor other, *, Tensor(a!) out) -> Tensor(a!)"}}},
+     {"aten::div.out_mode",
+      {{4,
+        "div_out_mode_0_3",
+        "aten::div.out_mode(Tensor self, Tensor other, *, str? rounding_mode, Tensor(a!) out) -> Tensor(a!)"}}},
      {"aten::div_.Tensor",
       {{4,
         "div__Tensor_0_3",
         "aten::div_.Tensor(Tensor(a!) self, Tensor other) -> Tensor(a!)"}}},
+     {"aten::div_.Tensor_mode",
+      {{4,
+        "div__Tensor_mode_0_3",
+        "aten::div_.Tensor_mode(Tensor(a!) self, Tensor other, *, str? rounding_mode) -> Tensor(a!)"}}},
      {"aten::div_.Scalar",
       {{4,
         "div__Scalar_0_3",
         "aten::div_.Scalar(Tensor(a!) self, Scalar other) -> Tensor(a!)"}}},
+     {"aten::div_.Scalar_mode",
+      {{4,
+        "div__Scalar_mode_0_3",
+        "aten::div_.Scalar_mode(Tensor(a!) self, Scalar other, *, str? rounding_mode) -> Tensor(a!)"}}},
      {"aten::full",
       {{5,
         "full_0_4",
         "aten::full(int[] size, Scalar fill_value, *, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor"}}},
+     {"aten::full.names",
+      {{5,
+        "full_names_0_4",
+        "aten::full.names(int[] size, Scalar fill_value, *, Dimname[]? names, ScalarType? dtype=None, Layout? layout=None, Device? device=None, bool? pin_memory=None) -> Tensor"}}},
      {"aten::full.out",
       {{5,
         "full_out_0_4",
@@ -84,7 +107,7 @@ get_operator_version_map() {
 
 void test_only_add_entry(const std::string& op_name, UpgraderEntry entry) {
   test_only_reset_flag();
-  operatorVersionMap[op_name].push_back(entry);
+  operatorVersionMap[op_name].emplace_back(std::move(entry));
 }
 
 void test_only_remove_entry(const std::string& op_name) {
@@ -96,5 +119,14 @@ void test_only_reset_flag() {
   isVersionMapSorted = false;
 }
 
-} // namespace jit
-} // namespace torch
+static bool calculatePackageVersionBasedOnUpgraders = false;
+
+void calculate_package_version_based_on_upgraders(bool val) {
+  calculatePackageVersionBasedOnUpgraders = val;
+}
+
+bool get_version_calculator_flag() {
+  return calculatePackageVersionBasedOnUpgraders;
+}
+
+} // namespace torch::jit

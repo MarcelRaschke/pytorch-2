@@ -1,14 +1,23 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <ATen/Dispatch.h>
-#include <ATen/NativeFunctions.h>
 
 #include <ATen/native/SobolEngineOpsUtils.h>
 #include <c10/util/irange.h>
 
-#include <vector>
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/_sobol_engine_draw_native.h>
+#include <ATen/ops/_sobol_engine_ff_native.h>
+#include <ATen/ops/_sobol_engine_initialize_state_native.h>
+#include <ATen/ops/_sobol_engine_scramble_native.h>
+#include <ATen/ops/arange_native.h>
+#include <ATen/ops/empty.h>
+#endif
 
-namespace at {
-namespace native {
+namespace at::native {
 
 using namespace sobol_utils;
 
@@ -18,7 +27,7 @@ using namespace sobol_utils;
 /// an extra operation to obtain the size of the first dimension of
 /// `sobolstate`.
 std::tuple<Tensor, Tensor> _sobol_engine_draw(const Tensor& quasi, int64_t n, const Tensor& sobolstate,
-                                              int64_t dimension, int64_t num_generated, optional<ScalarType> dtype) {
+                                              int64_t dimension, int64_t num_generated, std::optional<ScalarType> dtype) {
   TORCH_CHECK(sobolstate.dtype() == at::kLong,
            "sobolstate needs to be of type ", at::kLong);
   TORCH_CHECK(quasi.dtype() == at::kLong,
@@ -64,8 +73,6 @@ Tensor& _sobol_engine_ff_(Tensor& quasi, int64_t n, const Tensor& sobolstate,
            "quasi needs to be of type ", at::kLong);
 
   // We deal with `data` and `strides` due to performance issues.
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  int64_t l;
   int64_t* quasi_data = quasi.data_ptr<int64_t>();
   int64_t* sobolstate_data = sobolstate.data_ptr<int64_t>();
 
@@ -73,7 +80,7 @@ Tensor& _sobol_engine_ff_(Tensor& quasi, int64_t n, const Tensor& sobolstate,
   int64_t sobolstate_row_stride = sobolstate.stride(0), sobolstate_col_stride = sobolstate.stride(1);
 
   for (int64_t i = 0; i < n; i++, num_generated++) {
-    l = rightmost_zero(num_generated);
+    auto l = rightmost_zero(num_generated);
     for (const auto j : c10::irange(dimension)) {
       quasi_data[j * quasi_stride] ^= sobolstate_data[j * sobolstate_row_stride + l * sobolstate_col_stride];
     }
@@ -179,5 +186,4 @@ Tensor& _sobol_engine_initialize_state_(Tensor& sobolstate, int64_t dimension) {
   return sobolstate;
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native

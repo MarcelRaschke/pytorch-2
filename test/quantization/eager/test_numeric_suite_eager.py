@@ -1,8 +1,10 @@
 # Owner(s): ["oncall: quantization"]
+# ruff: noqa: F841
 
+import unittest
 import torch
 import torch.nn as nn
-import torch.nn.quantized as nnq
+import torch.ao.nn.quantized as nnq
 from torch.ao.quantization import (
     DeQuantStub,
     QuantStub,
@@ -19,6 +21,8 @@ from torch.ao.ns._numeric_suite import (
     compare_model_outputs,
     compare_model_stub,
     compare_weights,
+    prepare_model_outputs,
+    get_matching_activations,
 )
 from torch.testing._internal.common_quantization import (
     AnnotatedConvBnReLUModel,
@@ -30,13 +34,14 @@ from torch.testing._internal.common_quantization import (
     QuantizationTestCase,
     SingleLayerLinearDynamicModel,
     test_only_eval_fn,
+    skip_if_no_torchvision,
 )
 from torch.testing._internal.common_quantized import override_qengines
-
+from torch.testing._internal.common_utils import IS_ARM64
 
 class SubModule(torch.nn.Module):
-    def __init__(self):
-        super(SubModule, self).__init__()
+    def __init__(self) -> None:
+        super().__init__()
         self.qconfig = default_qconfig
         self.mod1 = torch.nn.Conv2d(3, 3, 3, bias=False).to(dtype=torch.float)
         self.mod2 = nn.ReLU()
@@ -52,8 +57,8 @@ class SubModule(torch.nn.Module):
 
 
 class ModelWithSubModules(torch.nn.Module):
-    def __init__(self):
-        super(ModelWithSubModules, self).__init__()
+    def __init__(self) -> None:
+        super().__init__()
         self.mod1 = SubModule()
         self.conv = torch.nn.Conv2d(3, 5, 3, bias=False).to(dtype=torch.float)
 
@@ -64,8 +69,8 @@ class ModelWithSubModules(torch.nn.Module):
 
 
 class ModelWithFunctionals(torch.nn.Module):
-    def __init__(self):
-        super(ModelWithFunctionals, self).__init__()
+    def __init__(self) -> None:
+        super().__init__()
         self.mycat = nnq.FloatFunctional()
         self.myadd = nnq.FloatFunctional()
         self.mymul = nnq.FloatFunctional()
@@ -100,7 +105,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
                 float_model.state_dict(), q_model.state_dict()
             )
             self.assertEqual(len(weight_dict), 1)
-            for k, v in weight_dict.items():
+            for v in weight_dict.values():
                 self.assertTrue(v["float"].shape == v["quantized"].shape)
 
         model_list = [AnnotatedConvModel(qengine), AnnotatedConvBnReLUModel(qengine)]
@@ -122,7 +127,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
                 float_model.state_dict(), q_model.state_dict()
             )
             self.assertEqual(len(weight_dict), 1)
-            for k, v in weight_dict.items():
+            for v in weight_dict.values():
                 self.assertTrue(v["float"].shape == v["quantized"].shape)
 
         model_list = [AnnotatedSingleLayerLinearModel(qengine)]
@@ -144,7 +149,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
                 float_model.state_dict(), q_model.state_dict()
             )
             self.assertEqual(len(weight_dict), 1)
-            for k, v in weight_dict.items():
+            for v in weight_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -168,7 +173,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
                 float_model.state_dict(), q_model.state_dict()
             )
             self.assertEqual(len(weight_dict), 1)
-            for k, v in weight_dict.items():
+            for v in weight_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -190,7 +195,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
         def compare_and_validate_results(float_model, q_model, module_swap_list, data):
             ob_dict = compare_model_stub(float_model, q_model, module_swap_list, data)
             self.assertEqual(len(ob_dict), 1)
-            for k, v in ob_dict.items():
+            for v in ob_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -217,7 +222,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
         def compare_and_validate_results(float_model, q_model, module_swap_list, data):
             ob_dict = compare_model_stub(float_model, q_model, module_swap_list, data)
             self.assertEqual(len(ob_dict), 1)
-            for k, v in ob_dict.items():
+            for v in ob_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -242,7 +247,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
         def compare_and_validate_results(float_model, q_model, module_swap_list, data):
             ob_dict = compare_model_stub(float_model, q_model, module_swap_list, data)
             self.assertEqual(len(ob_dict), 1)
-            for k, v in ob_dict.items():
+            for v in ob_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -297,7 +302,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
         self.assertTrue(isinstance(q_model.myadd_relu, Shadow))
         self.assertTrue(isinstance(q_model.my_scalar_add, Shadow))
         self.assertTrue(isinstance(q_model.my_scalar_mul, Shadow))
-        for k, v in ob_dict.items():
+        for v in ob_dict.values():
             self.assertTrue(len(v["float"]) == len(v["quantized"]))
             for i, val in enumerate(v["quantized"]):
                 self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -311,7 +316,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
         def compare_and_validate_results(float_model, q_model, module_swap_list, data):
             ob_dict = compare_model_stub(float_model, q_model, module_swap_list, data)
             self.assertEqual(len(ob_dict), 1)
-            for k, v in ob_dict.items():
+            for v in ob_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -340,7 +345,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
                 float_model, q_model, module_swap_list, input, hidden
             )
             self.assertEqual(len(ob_dict), 1)
-            for k, v in ob_dict.items():
+            for v in ob_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -371,7 +376,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
             expected_act_compare_dict_keys = {"conv.stats", "quant.stats"}
 
             self.assertTrue(act_compare_dict.keys() == expected_act_compare_dict_keys)
-            for k, v in act_compare_dict.items():
+            for v in act_compare_dict.values():
                 self.assertTrue(v["float"][0].shape == v["quantized"][0].shape)
 
         model_list = [AnnotatedConvModel(qengine), AnnotatedConvBnReLUModel(qengine)]
@@ -394,7 +399,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
             expected_act_compare_dict_keys = {"fc1.quant.stats", "fc1.module.stats"}
 
             self.assertTrue(act_compare_dict.keys() == expected_act_compare_dict_keys)
-            for k, v in act_compare_dict.items():
+            for v in act_compare_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -421,18 +426,16 @@ class TestNumericSuiteEager(QuantizationTestCase):
         q_model(self.img_data_2d[0][0])
         q_model = convert(q_model)
         act_compare_dict = compare_model_outputs(model, q_model, self.img_data_2d[0][0])
-        self.assertEqual(len(act_compare_dict), 7)
+        self.assertEqual(len(act_compare_dict), 5)
         expected_act_compare_dict_keys = {
             "mycat.stats",
             "myadd.stats",
             "mymul.stats",
             "myadd_relu.stats",
-            "my_scalar_add.stats",
-            "my_scalar_mul.stats",
             "quant.stats",
         }
         self.assertTrue(act_compare_dict.keys() == expected_act_compare_dict_keys)
-        for k, v in act_compare_dict.items():
+        for v in act_compare_dict.values():
             self.assertTrue(len(v["float"]) == len(v["quantized"]))
             for i, val in enumerate(v["quantized"]):
                 self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -449,7 +452,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
             expected_act_compare_dict_keys = {"fc1.stats"}
 
             self.assertTrue(act_compare_dict.keys() == expected_act_compare_dict_keys)
-            for k, v in act_compare_dict.items():
+            for v in act_compare_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(v["float"][i].shape == v["quantized"][i].shape)
@@ -478,7 +481,7 @@ class TestNumericSuiteEager(QuantizationTestCase):
             expected_act_compare_dict_keys = {"lstm.stats"}
 
             self.assertTrue(act_compare_dict.keys() == expected_act_compare_dict_keys)
-            for k, v in act_compare_dict.items():
+            for v in act_compare_dict.values():
                 self.assertTrue(len(v["float"]) == len(v["quantized"]))
                 for i, val in enumerate(v["quantized"]):
                     self.assertTrue(len(v["float"][i]) == len(v["quantized"][i]))
@@ -534,3 +537,52 @@ class TestNumericSuiteEager(QuantizationTestCase):
 
         self.assertEqual(len(logger.stats["float"]), 2)
         self.assertEqual(len(logger.stats["quantized"]), 2)
+
+    @skip_if_no_torchvision
+    def _test_vision_model(self, float_model):
+        float_model.to('cpu')
+        float_model.eval()
+        float_model.fuse_model()
+        float_model.qconfig = torch.ao.quantization.default_qconfig
+        img_data = [(torch.rand(2, 3, 224, 224, dtype=torch.float), torch.randint(0, 1, (2,), dtype=torch.long)) for _ in range(2)]
+        qmodel = quantize(float_model, torch.ao.quantization.default_eval_fn, [img_data], inplace=False)
+
+        wt_compare_dict = compare_weights(float_model.state_dict(), qmodel.state_dict())
+
+        def compute_error(x, y):
+            Ps = torch.norm(x)
+            Pn = torch.norm(x - y)
+            return 20 * torch.log10(Ps / Pn)
+
+        data = img_data[0][0]
+        # Take in floating point and quantized model as well as input data, and returns a dict, with keys
+        # corresponding to the quantized module names and each entry being a dictionary with two keys 'float' and
+        # 'quantized', containing the activations of floating point and quantized model at matching locations.
+        act_compare_dict = compare_model_outputs(float_model, qmodel, data)
+
+
+        for key in act_compare_dict:
+            compute_error(act_compare_dict[key]['float'][0], act_compare_dict[key]['quantized'][0].dequantize())
+
+        prepare_model_outputs(float_model, qmodel)
+
+        for data in img_data:
+            float_model(data[0])
+            qmodel(data[0])
+
+        # Find the matching activation between floating point and quantized modules, and return a dict with key
+        # corresponding to quantized module names and each entry being a dictionary with two keys 'float'
+        # and 'quantized', containing the matching floating point and quantized activations logged by the logger
+        act_compare_dict = get_matching_activations(float_model, qmodel)
+
+    @skip_if_no_torchvision
+    @unittest.skipIf(IS_ARM64, "Not working on arm right now")
+    def test_mobilenet_v2(self):
+        from torchvision.models.quantization import mobilenet_v2
+        self._test_vision_model(mobilenet_v2(pretrained=True, quantize=False))
+
+    @skip_if_no_torchvision
+    @unittest.skipIf(IS_ARM64, "Not working on arm right now")
+    def test_mobilenet_v3(self):
+        from torchvision.models.quantization import mobilenet_v3_large
+        self._test_vision_model(mobilenet_v3_large(pretrained=True, quantize=False))

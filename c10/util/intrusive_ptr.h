@@ -1,13 +1,11 @@
 #pragma once
 
-#include <c10/util/C++17.h>
 #include <c10/util/Exception.h>
-#include <c10/util/ExclusivelyOwned.h>
 #include <c10/util/MaybeOwned.h>
 #include <atomic>
 #include <climits>
 #include <memory>
-#include <stdexcept>
+#include <type_traits>
 
 namespace pybind11 {
 template <typename, typename...>
@@ -24,12 +22,14 @@ namespace intrusive_ptr {
 inline void incref(intrusive_ptr_target* self);
 }
 
-template <typename TTarget>
-struct ExclusivelyOwnedTraits;
-
 // constructor tag used by intrusive_ptr constructors
 struct DontIncreaseRefcount {};
 } // namespace raw
+
+namespace detail {
+constexpr uint32_t kImpracticallyHugeReferenceCount = 0x0FFFFFFF;
+} // namespace detail
+
 /**
  * intrusive_ptr<T> is an alternative to shared_ptr<T> that has better
  * performance because it does the refcounting intrusively
@@ -56,6 +56,7 @@ struct DontIncreaseRefcount {};
 // tells us if the object was allocated by us.  If it wasn't, no
 // intrusive_ptr for you!
 
+// NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor)
 class C10_API intrusive_ptr_target {
   // Note [Weak references for intrusive refcounting]
   // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -79,8 +80,8 @@ class C10_API intrusive_ptr_target {
   //    atomically increment the use count, if it is greater than 0.
   //    If it is not, you must report that the storage is dead.
   //
-  mutable std::atomic<size_t> refcount_;
-  mutable std::atomic<size_t> weakcount_;
+  mutable std::atomic<uint32_t> refcount_;
+  mutable std::atomic<uint32_t> weakcount_;
 
   template <typename T, typename NullType>
   friend class intrusive_ptr;
@@ -92,7 +93,7 @@ class C10_API intrusive_ptr_target {
       intrusive_ptr_target* self);
 
   template <typename T>
-  friend struct ExclusivelyOwnedTraits;
+  friend struct ExclusivelyOwnedTensorTraits;
 
  protected:
   // protected destructor. We never want to destruct intrusive_ptr_target*
@@ -124,15 +125,17 @@ class C10_API intrusive_ptr_target {
         // now it's getting destroyed through whatever mechanism the
         // caller of unsafe_adapt_non_heap_allocated wanted to
         // use). We choose our reference count such that the count
-        // will not dip below INT_MAX regardless.
-        refcount_.load() == 0 || refcount_.load() >= INT_MAX,
+        // will not dip below kImpracticallyHugeReferenceCount regardless.
+        refcount_.load() == 0 ||
+            refcount_.load() >= detail::kImpracticallyHugeReferenceCount,
         "Tried to destruct an intrusive_ptr_target that still has intrusive_ptr to it; refcount was ",
         refcount_.load());
     TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
         // See ~intrusive_ptr for optimization that will frequently result in 1
         // at destruction time.
         weakcount_.load() == 1 || weakcount_.load() == 0 ||
-            weakcount_.load() == INT_MAX - 1 || weakcount_.load() == INT_MAX,
+            weakcount_.load() == detail::kImpracticallyHugeReferenceCount - 1 ||
+            weakcount_.load() == detail::kImpracticallyHugeReferenceCount,
         "Tried to destruct an intrusive_ptr_target that still has weak_intrusive_ptr to it");
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning(pop)
@@ -170,11 +173,8 @@ class C10_API intrusive_ptr_target {
    * i.e. no more calls to methods or accesses to members (we just can't
    * destruct it yet because we need the weakcount accessible).
    *
-   * Even if there are no weak references (i.e. your class is about to be
-   * destructed), this function is guaranteed to be called first.
-   * However, if you use your class for an object on the stack that is
-   * destructed by the scope (i.e. without intrusive_ptr), this function will
-   * not be called.
+   * If there are no weak references (i.e. your class is about to be
+   * destructed), this function WILL NOT be called.
    */
   virtual void release_resources() {}
 };
@@ -198,23 +198,23 @@ TTarget* assign_ptr_(TTarget* rhs) {
 
 // Increment needs to be acquire-release to make use_count() and
 // unique() reliable.
-inline size_t atomic_refcount_increment(std::atomic<size_t>& refcount) {
+inline uint32_t atomic_refcount_increment(std::atomic<uint32_t>& refcount) {
   return refcount.fetch_add(1, std::memory_order_acq_rel) + 1;
 }
 
 // weak_use_count() is only used for testing, so we don't need it to
 // be reliable. Relaxed should be fine.
-inline size_t atomic_weakcount_increment(std::atomic<size_t>& weakcount) {
+inline uint32_t atomic_weakcount_increment(std::atomic<uint32_t>& weakcount) {
   return weakcount.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 // Both decrements need to be acquire-release for correctness. See
 // e.g. std::shared_ptr implementation.
-inline size_t atomic_refcount_decrement(std::atomic<size_t>& refcount) {
+inline uint32_t atomic_refcount_decrement(std::atomic<uint32_t>& refcount) {
   return refcount.fetch_sub(1, std::memory_order_acq_rel) - 1;
 }
 
-inline size_t atomic_weakcount_decrement(std::atomic<size_t>& weakcount) {
+inline uint32_t atomic_weakcount_decrement(std::atomic<uint32_t>& weakcount) {
   return weakcount.fetch_sub(1, std::memory_order_acq_rel) - 1;
 }
 
@@ -232,27 +232,27 @@ class intrusive_ptr final {
 //  the target class T to be fully defined when intrusive_ptr<T> is instantiated
 //  this is a problem for classes that contain pointers to themselves
 //  static_assert(
-//      std::is_base_of<intrusive_ptr_target, TTarget>::value,
+//      std::is_base_of_v<intrusive_ptr_target, TTarget>,
 //      "intrusive_ptr can only be used for classes that inherit from
 //      intrusive_ptr_target.");
 #ifndef _WIN32
   // This static_assert triggers on MSVC
   //  error C2131: expression did not evaluate to a constant
   static_assert(
+      // NOLINTNEXTLINE(misc-redundant-expression)
       NullType::singleton() == NullType::singleton(),
       "NullType must have a constexpr singleton() method");
 #endif
   static_assert(
-      std::is_base_of<
+      std::is_base_of_v<
           TTarget,
-          typename std::remove_pointer<decltype(NullType::singleton())>::type>::
-          value,
+          std::remove_pointer_t<decltype(NullType::singleton())>>,
       "NullType::singleton() must return a element_type* pointer");
 
   TTarget* target_;
 
   template <typename T>
-  friend struct ExclusivelyOwnedTraits;
+  friend struct ExclusivelyOwnedTensorTraits;
   template <class TTarget2, class NullType2>
   friend class intrusive_ptr;
   friend class weak_intrusive_ptr<TTarget, NullType>;
@@ -269,7 +269,7 @@ class intrusive_ptr final {
 
   void retain_() {
     if (target_ != NullType::singleton()) {
-      size_t new_refcount =
+      uint32_t new_refcount =
           detail::atomic_refcount_increment(target_->refcount_);
       TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
           new_refcount != 1,
@@ -280,20 +280,23 @@ class intrusive_ptr final {
   void reset_() noexcept {
     if (target_ != NullType::singleton() &&
         detail::atomic_refcount_decrement(target_->refcount_) == 0) {
-      // justification for const_cast: release_resources is basically a
-      // destructor and a destructor always mutates the object, even for const
-      // objects. NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDelete)
-      const_cast<std::remove_const_t<TTarget>*>(target_)->release_resources();
-
       // See comment above about weakcount. As long as refcount>0,
       // weakcount is one larger than the actual number of weak references.
       // So we need to decrement it here.
-      if (target_->weakcount_.load(std::memory_order_acquire) == 1 ||
-          detail::atomic_weakcount_decrement(target_->weakcount_) == 0) {
+      bool should_delete =
+          target_->weakcount_.load(std::memory_order_acquire) == 1;
+      if (!should_delete) {
+        // justification for const_cast: release_resources is basically a
+        // destructor and a destructor always mutates the object, even for const
+        // objects. NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+        const_cast<std::remove_const_t<TTarget>*>(target_)->release_resources();
+        should_delete =
+            detail::atomic_weakcount_decrement(target_->weakcount_) == 0;
+      }
+      if (should_delete) {
         delete target_;
       }
     }
-    target_ = NullType::singleton();
   }
 
   // raw pointer constructors are not public because we shouldn't make
@@ -329,6 +332,9 @@ class intrusive_ptr final {
   intrusive_ptr() noexcept
       : intrusive_ptr(NullType::singleton(), raw::DontIncreaseRefcount{}) {}
 
+  intrusive_ptr(std::nullptr_t) noexcept
+      : intrusive_ptr(NullType::singleton(), raw::DontIncreaseRefcount{}) {}
+
   // This constructor will not increase the ref counter for you.
   // We use the tagged dispatch mechanism to explicitly mark this constructor
   // to not increase the refcount
@@ -343,11 +349,12 @@ class intrusive_ptr final {
   }
 
   template <class From, class FromNullType>
+  // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
   /* implicit */ intrusive_ptr(intrusive_ptr<From, FromNullType>&& rhs) noexcept
       : target_(
             detail::assign_ptr_<TTarget, NullType, FromNullType>(rhs.target_)) {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. intrusive_ptr move constructor got pointer of wrong type.");
     rhs.target_ = FromNullType::singleton();
   }
@@ -361,7 +368,7 @@ class intrusive_ptr final {
       : target_(
             detail::assign_ptr_<TTarget, NullType, FromNullType>(rhs.target_)) {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. intrusive_ptr copy constructor got pointer of wrong type.");
     retain_();
   }
@@ -371,27 +378,33 @@ class intrusive_ptr final {
   }
 
   intrusive_ptr& operator=(intrusive_ptr&& rhs) & noexcept {
-    return operator=<TTarget, NullType>(std::move(rhs));
+    // NOLINTNEXTLINE(*assign*)
+    return this->template operator= <TTarget, NullType>(std::move(rhs));
   }
 
   template <class From, class FromNullType>
   intrusive_ptr& operator=(intrusive_ptr<From, FromNullType>&& rhs) & noexcept {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. intrusive_ptr move assignment got pointer of wrong type.");
     intrusive_ptr tmp = std::move(rhs);
     swap(tmp);
     return *this;
   }
 
+  // Assignment is implemented using copy and swap. That's safe for self
+  // assignment.
+  // NOLINTNEXTLINE(bugprone-unhandled-self-assignment)
   intrusive_ptr& operator=(const intrusive_ptr& rhs) & noexcept {
-    return operator=<TTarget, NullType>(rhs);
+    // NOLINTNEXTLINE(*assign-operator, *assignment-signature)
+    return this->template operator= <TTarget, NullType>(rhs);
   }
 
   template <class From, class FromNullType>
-  intrusive_ptr& operator=(const intrusive_ptr<From, NullType>& rhs) & {
+  intrusive_ptr& operator=(
+      const intrusive_ptr<From, NullType>& rhs) & noexcept {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. intrusive_ptr copy assignment got pointer of wrong type.");
     intrusive_ptr tmp = rhs;
     swap(tmp);
@@ -407,7 +420,6 @@ class intrusive_ptr final {
   }
 
   TTarget* operator->() const noexcept {
-    // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDelete)
     return target_;
   }
 
@@ -417,12 +429,11 @@ class intrusive_ptr final {
 
   void reset() noexcept {
     reset_();
+    target_ = NullType::singleton();
   }
 
   void swap(intrusive_ptr& rhs) noexcept {
-    TTarget* tmp = target_;
-    target_ = rhs.target_;
-    rhs.target_ = tmp;
+    std::swap(target_, rhs.target_);
   }
 
   // We do a lot of null-pointer checks in our code, good to have this be cheap.
@@ -430,14 +441,14 @@ class intrusive_ptr final {
     return target_ != NullType::singleton();
   }
 
-  size_t use_count() const noexcept {
+  uint32_t use_count() const noexcept {
     if (target_ == NullType::singleton()) {
       return 0;
     }
     return target_->refcount_.load(std::memory_order_acquire);
   }
 
-  size_t weak_use_count() const noexcept {
+  uint32_t weak_use_count() const noexcept {
     if (target_ == NullType::singleton()) {
       return 0;
     }
@@ -469,6 +480,10 @@ class intrusive_ptr final {
    * passed in *must* have been created using intrusive_ptr::release().
    */
   static intrusive_ptr reclaim(TTarget* owning_ptr) {
+    TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
+        owning_ptr == NullType::singleton() ||
+            owning_ptr->refcount_.load() == 0 || owning_ptr->weakcount_.load(),
+        "TTarget violates the invariant that refcount > 0  =>  weakcount > 0");
     return intrusive_ptr(owning_ptr, raw::DontIncreaseRefcount{});
   }
 
@@ -525,22 +540,24 @@ class intrusive_ptr final {
    */
   static intrusive_ptr unsafe_adapt_non_heap_allocated(
       TTarget* raw_ptr,
-      size_t expected_decrefs) {
+      uint32_t expected_decrefs) {
     intrusive_ptr result(raw_ptr, raw::DontIncreaseRefcount{});
-    // INT_MAX is impractically huge for a reference count, while
-    // being in no danger of overflowing size_t. We actually only need to
-    // initialize the refcount to 2 -- we are just doing an unbalanced
+    // kImpracticallyHugeReferenceCount is impractically huge for a reference
+    // count, while being in no danger of overflowing uint32_t. We actually only
+    // need to initialize the refcount to 2 -- we are just doing an unbalanced
     // incref to prevent the non-heap-allocated target from being
     // freed, and we are optimizing that incref by directly
     // initializing the refcounts rather than doing an expensive
-    // atomic increment. The reason to use INT_MAX is to accommodate
-    // the debug assertions in ~intrusive_ptr_target.
+    // atomic increment. The reason to use kImpracticallyHugeReferenceCount is
+    // to accommodate the debug assertions in ~intrusive_ptr_target.
 #ifdef NDEBUG
     expected_decrefs = 0;
 #endif
     result.target_->refcount_.store(
-        INT_MAX + expected_decrefs, std::memory_order_relaxed);
-    result.target_->weakcount_.store(INT_MAX, std::memory_order_relaxed);
+        detail::kImpracticallyHugeReferenceCount + expected_decrefs,
+        std::memory_order_relaxed);
+    result.target_->weakcount_.store(
+        detail::kImpracticallyHugeReferenceCount, std::memory_order_relaxed);
     return result;
   }
 
@@ -595,6 +612,20 @@ inline bool operator==(
   return lhs.get() == rhs.get();
 }
 
+template <class TTarget1, class NullType1>
+inline bool operator==(
+    const intrusive_ptr<TTarget1, NullType1>& lhs,
+    std::nullptr_t) noexcept {
+  return lhs.get() == nullptr;
+}
+
+template <class TTarget2, class NullType2>
+inline bool operator==(
+    std::nullptr_t,
+    const intrusive_ptr<TTarget2, NullType2>& rhs) noexcept {
+  return nullptr == rhs.get();
+}
+
 template <class TTarget1, class NullType1, class TTarget2, class NullType2>
 inline bool operator!=(
     const intrusive_ptr<TTarget1, NullType1>& lhs,
@@ -602,6 +633,19 @@ inline bool operator!=(
   return !operator==(lhs, rhs);
 }
 
+template <class TTarget1, class NullType1>
+inline bool operator!=(
+    const intrusive_ptr<TTarget1, NullType1>& lhs,
+    std::nullptr_t) noexcept {
+  return !operator==(lhs, nullptr);
+}
+
+template <class TTarget2, class NullType2>
+inline bool operator!=(
+    std::nullptr_t,
+    const intrusive_ptr<TTarget2, NullType2>& rhs) noexcept {
+  return !operator==(nullptr, rhs);
+}
 template <typename T>
 struct MaybeOwnedTraits<c10::intrusive_ptr<T>> {
   using owned_type = c10::intrusive_ptr<T>;
@@ -620,15 +664,17 @@ struct MaybeOwnedTraits<c10::intrusive_ptr<T>> {
     toDestroy.release();
   }
 
-  static const owned_type& referenceFromBorrow(const borrow_type& borrow) {
+  static const owned_type& referenceFromBorrow(
+      const borrow_type& borrow) noexcept {
     return borrow;
   }
 
-  static const owned_type* pointerFromBorrow(const borrow_type& borrow) {
+  static const owned_type* pointerFromBorrow(
+      const borrow_type& borrow) noexcept {
     return &borrow;
   }
 
-  static bool debugBorrowIsValid(const borrow_type& /*borrow*/) {
+  static bool debugBorrowIsValid(const borrow_type& /*borrow*/) noexcept {
     return true;
   }
 };
@@ -639,7 +685,7 @@ template <
 class weak_intrusive_ptr final {
  private:
   static_assert(
-      std::is_base_of<intrusive_ptr_target, TTarget>::value,
+      std::is_base_of_v<intrusive_ptr_target, TTarget>,
       "intrusive_ptr can only be used for classes that inherit from intrusive_ptr_target.");
 #ifndef _WIN32
   // This static_assert triggers on MSVC
@@ -649,10 +695,9 @@ class weak_intrusive_ptr final {
       "NullType must have a constexpr singleton() method");
 #endif
   static_assert(
-      std::is_base_of<
+      std::is_base_of_v<
           TTarget,
-          typename std::remove_pointer<decltype(NullType::singleton())>::type>::
-          value,
+          std::remove_pointer_t<decltype(NullType::singleton())>>,
       "NullType::singleton() must return a element_type* pointer");
 
   TTarget* target_;
@@ -662,7 +707,7 @@ class weak_intrusive_ptr final {
 
   void retain_() {
     if (target_ != NullType::singleton()) {
-      size_t new_weakcount =
+      uint32_t new_weakcount =
           detail::atomic_weakcount_increment(target_->weakcount_);
       TORCH_INTERNAL_ASSERT_DEBUG_ONLY(
           new_weakcount != 1,
@@ -695,11 +740,12 @@ class weak_intrusive_ptr final {
 
   template <class From, class FromNullType>
   /* implicit */ weak_intrusive_ptr(
+      // NOLINTNEXTLINE(cppcoreguidelines-rvalue-reference-param-not-moved)
       weak_intrusive_ptr<From, FromNullType>&& rhs) noexcept
       : target_(
             detail::assign_ptr_<TTarget, NullType, FromNullType>(rhs.target_)) {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. weak_intrusive_ptr move constructor got pointer of wrong type.");
     rhs.target_ = FromNullType::singleton();
   }
@@ -714,7 +760,7 @@ class weak_intrusive_ptr final {
       : target_(
             detail::assign_ptr_<TTarget, NullType, FromNullType>(rhs.target_)) {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. weak_intrusive_ptr copy constructor got pointer of wrong type.");
     retain_();
   }
@@ -724,14 +770,15 @@ class weak_intrusive_ptr final {
   }
 
   weak_intrusive_ptr& operator=(weak_intrusive_ptr&& rhs) & noexcept {
-    return operator=<TTarget, NullType>(std::move(rhs));
+    // NOLINTNEXTLINE(*assign*)
+    return this->template operator= <TTarget, NullType>(std::move(rhs));
   }
 
   template <class From, class FromNullType>
   weak_intrusive_ptr& operator=(
       weak_intrusive_ptr<From, FromNullType>&& rhs) & noexcept {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. weak_intrusive_ptr move assignment got pointer of wrong type.");
     weak_intrusive_ptr tmp = std::move(rhs);
     swap(tmp);
@@ -739,7 +786,11 @@ class weak_intrusive_ptr final {
   }
 
   weak_intrusive_ptr& operator=(const weak_intrusive_ptr& rhs) & noexcept {
-    return operator=<TTarget, NullType>(rhs);
+    if (this == &rhs) {
+      return *this;
+    }
+    // NOLINTNEXTLINE(*assign*)
+    return this->template operator= <TTarget, NullType>(rhs);
   }
 
   weak_intrusive_ptr& operator=(
@@ -751,9 +802,9 @@ class weak_intrusive_ptr final {
 
   template <class From, class FromNullType>
   weak_intrusive_ptr& operator=(
-      const weak_intrusive_ptr<From, NullType>& rhs) & {
+      const weak_intrusive_ptr<From, NullType>& rhs) & noexcept {
     static_assert(
-        std::is_convertible<From*, TTarget*>::value,
+        std::is_convertible_v<From*, TTarget*>,
         "Type mismatch. weak_intrusive_ptr copy assignment got pointer of wrong type.");
     weak_intrusive_ptr tmp = rhs;
     swap(tmp);
@@ -795,7 +846,7 @@ class weak_intrusive_ptr final {
     return target_;
   }
 
-  size_t use_count() const noexcept {
+  uint32_t use_count() const noexcept {
     if (target_ == NullType::singleton()) {
       return 0;
     }
@@ -803,7 +854,7 @@ class weak_intrusive_ptr final {
         std::memory_order_acquire); // refcount, not weakcount!
   }
 
-  size_t weak_use_count() const noexcept {
+  uint32_t weak_use_count() const noexcept {
     if (target_ == NullType::singleton()) {
       return 0;
     }
@@ -963,7 +1014,7 @@ inline T* make_weak(T* self) {
   return wptr.release();
 }
 
-inline size_t use_count(intrusive_ptr_target* self) {
+inline uint32_t use_count(intrusive_ptr_target* self) {
   auto ptr = c10::intrusive_ptr<intrusive_ptr_target>::reclaim(self);
   auto r = ptr.use_count();
   ptr.release();
@@ -994,7 +1045,7 @@ inline T* lock(T* self) {
 }
 
 // This gives the STRONG refcount of a WEAK pointer
-inline size_t use_count(weak_intrusive_ptr_target* self) {
+inline uint32_t use_count(weak_intrusive_ptr_target* self) {
   auto wptr = c10::weak_intrusive_ptr<intrusive_ptr_target>::reclaim(self);
   auto r = wptr.use_count();
   wptr.release();

@@ -1,16 +1,24 @@
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
 #include <ATen/native/TensorTransformations.h>
 
+#include <ATen/Dispatch.h>
 #include <ATen/cuda/detail/IndexUtils.cuh>
-#include <ATen/NativeFunctions.h>
 #include <ATen/cuda/CUDAApplyUtils.cuh>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/macros/Macros.h>
 
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/empty_like.h>
+#include <ATen/ops/roll_native.h>
+#endif
+
 #include <cstddef>
 #include <vector>
 
-namespace at {
-namespace native {
+namespace at::native {
 
 template <typename scalar_t, typename IndexType>
 #if __CUDA_ARCH__ >= 350 || defined(USE_ROCM)
@@ -49,7 +57,7 @@ __global__ void flip_cuda_kernel(
     int64_t* strides_contiguous,
     int64_t* shape,
     int64_t total_dims) {
-  int64_t linear_index = blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t linear_index = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (linear_index >= N) {
     return;
   }
@@ -74,7 +82,7 @@ __global__ void flip_cuda_kernel(
 template <typename scalar_t>
 C10_LAUNCH_BOUNDS_1(cuda::getApplyBlockSize())
 __global__ void roll_cuda_kernel(
-    scalar_t* in_tensor,
+    const scalar_t* in_tensor,
     scalar_t* out_tensor,
     int64_t N,
     int64_t roll_dim,
@@ -82,7 +90,7 @@ __global__ void roll_cuda_kernel(
     int64_t size,
     int64_t stride,
     int64_t total_dims) {
-  int64_t linear_index = blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t linear_index = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (linear_index >= N) {
     return;
   }
@@ -126,12 +134,13 @@ Tensor roll_cuda(const Tensor& self, IntArrayRef shifts, IntArrayRef dims) {
 
   auto total_dims = in_tensor.dim();
 
-  AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND3(
+  AT_DISPATCH_ALL_TYPES_AND_COMPLEX_AND4(
       at::ScalarType::Half, at::ScalarType::Bool, at::ScalarType::BFloat16,
+      at::ScalarType::ComplexHalf,
       in_tensor.scalar_type(), "roll_cuda",
       [&] {
         roll_cuda_kernel<<<dim_grid, dim_block, 0, at::cuda::getCurrentCUDAStream()>>>(
-          in_tensor.data_ptr<scalar_t>(), out_tensor.data_ptr<scalar_t>(), N,
+          in_tensor.const_data_ptr<scalar_t>(), out_tensor.mutable_data_ptr<scalar_t>(), N,
           dim, start,
           size,
           in_tensor.stride(dim),
@@ -142,4 +151,4 @@ Tensor roll_cuda(const Tensor& self, IntArrayRef shifts, IntArrayRef dims) {
   return out_tensor;
 }
 
-}} // namespace at::native
+} // namespace at::native

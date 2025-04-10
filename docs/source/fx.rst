@@ -36,7 +36,7 @@ What is an FX transform? Essentially, it's a function that looks like this.
         # Step 3: Construct a Module to return
         return torch.fx.GraphModule(m, graph)
 
-Your transform will take in an :class:`torch.nn.Module`, acquire a :class:`Graph`
+Your transform will take in a :class:`torch.nn.Module`, acquire a :class:`Graph`
 from it, do some modifications, and return a new
 :class:`torch.nn.Module`. You should think of the :class:`torch.nn.Module` that your FX
 transform returns as identical to a regular :class:`torch.nn.Module` -- you can pass it to another
@@ -209,7 +209,7 @@ can be found below.
         node.replace_all_uses_with(new_node)
 
 For simple transformations that only consist of substitutions, you can also
-make use of the `subgraph rewriter. <https://github.com/pytorch/pytorch/blob/master/torch/fx/subgraph_rewriter.py>`__
+make use of the `subgraph rewriter. <https://github.com/pytorch/pytorch/blob/main/torch/fx/subgraph_rewriter.py>`__
 
 Subgraph Rewriting With replace_pattern()
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -230,7 +230,7 @@ Graph Manipulation Examples
 -  `Conv/Batch Norm
    fusion <https://github.com/pytorch/pytorch/blob/40cbf342d3c000712da92cfafeaca651b3e0bd3e/torch/fx/experimental/optimization.py#L50>`__
 -  `replace_pattern: Basic usage <https://github.com/pytorch/examples/blob/master/fx/subgraph_rewriter_basic_use.py>`__
--  `Quantization <https://pytorch.org/docs/master/quantization.html#prototype-fx-graph-mode-quantization>`__
+-  `Quantization <https://pytorch.org/docs/main/quantization.html#prototype-fx-graph-mode-quantization>`__
 -  `Invert Transformation <https://github.com/pytorch/examples/blob/master/fx/invert.py>`__
 
 Proxy/Retracing
@@ -270,7 +270,7 @@ on them and append them to the :class:`Graph`.
         graph : fx.Graph = tracer_class().trace(model)
         new_graph = fx.Graph()
         env = {}
-        tracer = torch.fx.proxy.GraphAppendingTracer(graph)
+        tracer = torch.fx.proxy.GraphAppendingTracer(new_graph)
         for node in graph.nodes:
             if node.op == 'call_function' and node.target in decomposition_rules:
                 # By wrapping the arguments with proxies,
@@ -355,7 +355,7 @@ properties on the nodes as we see them at runtime. That might look like:
                 attr_itr = self.mod
                 for i, atom in enumerate(target_atoms):
                     if not hasattr(attr_itr, atom):
-                        raise RuntimeError(f"Node referenced nonexistant target {'.'.join(target_atoms[:i])}")
+                        raise RuntimeError(f"Node referenced nonexistent target {'.'.join(target_atoms[:i])}")
                     attr_itr = getattr(attr_itr, atom)
                 return attr_itr
 
@@ -633,9 +633,9 @@ examine our traced module:
     # This print-out returns:
     """
     graph():
-        %x : [#users=1] = placeholder[target=x]
-        %y : [#users=1] = placeholder[target=y]
-        %add : [#users=1] = call_function[target=operator.add](args = (%x, %y), kwargs = {})
+        %x : [num_users=1] = placeholder[target=x]
+        %y : [num_users=1] = placeholder[target=y]
+        %add : [num_users=1] = call_function[target=operator.add](args = (%x, %y), kwargs = {})
         return add
     """
 
@@ -854,7 +854,7 @@ Non-\ ``torch`` Functions
 
 FX uses ``__torch_function__`` as the mechanism by which it intercepts
 calls (see the `technical
-overview <https://github.com/pytorch/pytorch/blob/master/torch/fx/OVERVIEW.md#technical-details>`__
+overview <https://github.com/pytorch/pytorch/blob/main/torch/fx/README.md#technical-details>`__
 for more information about this). Some functions, such as builtin Python
 functions or those in the ``math`` module, are not covered by
 ``__torch_function__``, but we would still like to capture them in
@@ -1039,7 +1039,7 @@ Miscellanea
         traced.eval()
 
         x = torch.randn(5, 3)
-        torch.testing.assert_allclose(traced(x), x)
+        torch.testing.assert_close(traced(x), x)
         """
         AssertionError: Tensor-likes are not close!
 
@@ -1071,7 +1071,7 @@ Miscellanea
         traced.eval()
 
         x = torch.randn(5, 3)
-        torch.testing.assert_allclose(traced(x), x)
+        torch.testing.assert_close(traced(x), x)
 
   - Because of this difference, consider marking modules that interact with the ``training`` flag dynamically as leaf modules.
 
@@ -1115,6 +1115,87 @@ API Reference
 .. Adding it here for coverage but this doesn't add anything to the
 .. rendered doc.
 .. py:module:: torch.fx.passes
+.. py:module:: torch.fx.passes.infra
+.. py:module:: torch.fx.passes.backends
+.. py:module:: torch.fx.passes.utils
+.. py:module:: torch.fx.passes.tests
 .. py:module:: torch.fx.experimental
 .. py:module:: torch.fx.experimental.unification
 .. py:module:: torch.fx.experimental.unification.multipledispatch
+.. py:module:: torch.fx.experimental.migrate_gradual_types
+.. py:module:: torch.fx.passes.dialect
+.. py:module:: torch.fx.passes.dialect.common
+.. py:module:: torch.fx.annotate
+.. py:module:: torch.fx.config
+.. py:module:: torch.fx.experimental.accelerator_partitioner
+.. py:module:: torch.fx.experimental.const_fold
+.. py:module:: torch.fx.experimental.debug
+.. py:module:: torch.fx.experimental.graph_gradual_typechecker
+.. py:module:: torch.fx.experimental.merge_matmul
+.. py:module:: torch.fx.experimental.meta_tracer
+.. py:module:: torch.fx.experimental.migrate_gradual_types.constraint
+.. py:module:: torch.fx.experimental.migrate_gradual_types.constraint_generator
+.. py:module:: torch.fx.experimental.migrate_gradual_types.constraint_transformation
+.. py:module:: torch.fx.experimental.migrate_gradual_types.operation
+.. py:module:: torch.fx.experimental.migrate_gradual_types.transform_to_z3
+.. py:module:: torch.fx.experimental.migrate_gradual_types.util
+.. py:module:: torch.fx.experimental.migrate_gradual_types.z3_types
+.. py:module:: torch.fx.experimental.normalize
+.. py:module:: torch.fx.experimental.optimization
+.. py:module:: torch.fx.experimental.partitioner_utils
+.. py:module:: torch.fx.experimental.recording
+.. py:module:: torch.fx.experimental.refinement_types
+.. py:module:: torch.fx.experimental.rewriter
+.. py:module:: torch.fx.experimental.schema_type_annotation
+.. py:module:: torch.fx.experimental.sym_node
+.. py:module:: torch.fx.experimental.unification.core
+.. py:module:: torch.fx.experimental.unification.dispatch
+.. py:module:: torch.fx.experimental.unification.match
+.. py:module:: torch.fx.experimental.unification.more
+.. py:module:: torch.fx.experimental.unification.multipledispatch.conflict
+.. py:module:: torch.fx.experimental.unification.multipledispatch.core
+.. py:module:: torch.fx.experimental.unification.multipledispatch.dispatcher
+.. py:module:: torch.fx.experimental.unification.multipledispatch.utils
+.. py:module:: torch.fx.experimental.unification.multipledispatch.variadic
+.. py:module:: torch.fx.experimental.unification.unification_tools
+.. py:module:: torch.fx.experimental.unification.utils
+.. py:module:: torch.fx.experimental.unification.variable
+.. py:module:: torch.fx.experimental.unify_refinements
+.. py:module:: torch.fx.experimental.validator
+.. py:module:: torch.fx.graph
+.. py:module:: torch.fx.graph_module
+.. py:module:: torch.fx.immutable_collections
+.. py:module:: torch.fx.interpreter
+.. py:module:: torch.fx.node
+.. py:module:: torch.fx.operator_schemas
+.. py:module:: torch.fx.passes.annotate_getitem_nodes
+.. py:module:: torch.fx.passes.backends.cudagraphs
+.. py:module:: torch.fx.passes.dialect.common.cse_pass
+.. py:module:: torch.fx.passes.fake_tensor_prop
+.. py:module:: torch.fx.passes.graph_drawer
+.. py:module:: torch.fx.passes.graph_manipulation
+.. py:module:: torch.fx.passes.graph_transform_observer
+.. py:module:: torch.fx.passes.infra.partitioner
+.. py:module:: torch.fx.passes.infra.pass_base
+.. py:module:: torch.fx.passes.infra.pass_manager
+.. py:module:: torch.fx.passes.net_min_base
+.. py:module:: torch.fx.passes.operator_support
+.. py:module:: torch.fx.passes.param_fetch
+.. py:module:: torch.fx.passes.pass_manager
+.. py:module:: torch.fx.passes.reinplace
+.. py:module:: torch.fx.passes.runtime_assert
+.. py:module:: torch.fx.passes.shape_prop
+.. py:module:: torch.fx.passes.split_module
+.. py:module:: torch.fx.passes.split_utils
+.. py:module:: torch.fx.passes.splitter_base
+.. py:module:: torch.fx.passes.tests.test_pass_manager
+.. py:module:: torch.fx.passes.tools_common
+.. py:module:: torch.fx.passes.utils.common
+.. py:module:: torch.fx.passes.utils.fuser_utils
+.. py:module:: torch.fx.passes.utils.matcher_utils
+.. py:module:: torch.fx.passes.utils.matcher_with_name_node_map_utils
+.. py:module:: torch.fx.passes.utils.source_matcher_utils
+.. py:module:: torch.fx.proxy
+.. py:module:: torch.fx.subgraph_rewriter
+.. py:module:: torch.fx.tensor_type
+.. py:module:: torch.fx.traceback

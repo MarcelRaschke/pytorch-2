@@ -16,6 +16,7 @@
 #if defined(CAFFE2_BUILD_MAIN_LIB)        || \
     defined(TORCH_CUDA_BUILD_MAIN_LIB)    || \
     defined(TORCH_HIP_BUILD_MAIN_LIB)     || \
+    defined(TORCH_XPU_BUILD_MAIN_LIB)     || \
     defined(TORCH_CUDA_CU_BUILD_MAIN_LIB) || \
     defined(TORCH_CUDA_CPP_BUILD_MAIN_LIB)
 #define TORCH_ASSERT_ONLY_METHOD_OPERATORS
@@ -33,7 +34,7 @@
 #include <c10/util/ExclusivelyOwned.h>
 #include <c10/util/Half.h>
 #include <c10/core/UndefinedTensorImpl.h>
-#include <c10/util/Optional.h>
+#include <optional>
 #include <ATen/Tensor.h>
 #include <ATen/native/Resize.h>
 
@@ -50,28 +51,11 @@ $external_backend_headers
 $dispatch_headers
 $ops_headers
 
-
 namespace at {
-
-// NB: TORCH_LIBRARY_IMPL must be in an anonymous namespace to avoid
-// ambiguity with conflicting identifiers that may have been defined in
-// at namespace already.
 namespace {
-
-${dispatch_helpers}
-
-${dispatch_anonymous_definitions}
-
-TORCH_LIBRARY_IMPL(aten, ${DispatchKey}, m) {
-  ${dispatch_registrations}
-}
-
-} // anonymous namespace
-
-namespace ${dispatch_namespace} {
-
-${dispatch_namespaced_definitions}
-
-} // namespace ${dispatch_namespace}
-
+$dispatch_helpers
+} // namespace
 } // namespace at
+
+// See template file RegisterDispatchDefinitions.ini
+$dispatch_definitions

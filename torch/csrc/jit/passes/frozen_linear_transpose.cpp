@@ -13,9 +13,9 @@
 #endif
 
 #include <iostream>
+#include <utility>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 namespace {
 
 using Tensor = at::Tensor;
@@ -60,7 +60,7 @@ class TransposeFrozenLinear {
       Tensor weight_tensor = constant_as<Tensor>(weight).value();
       Tensor weight_t_tensor = at::transpose(weight_tensor, 1, 0)
                                    .clone(at::MemoryFormat::Contiguous);
-      Value* weight_t = graph_->insertConstant(weight_t_tensor);
+      Value* weight_t = graph_->insertConstant(std::move(weight_t_tensor));
       matmul = graph_->create(aten::matmul, {node->inputs()[0], weight_t});
       matmul->insertAfter(node);
     }
@@ -78,7 +78,7 @@ class TransposeFrozenLinear {
       node->replaceAllUsesWith(bias_result);
     }
     node->destroy();
-  };
+  }
 
   void handleBlockAndSubblocks(Block* block) {}
 
@@ -98,5 +98,4 @@ TORCH_API bool FrozenLinearTranspose(std::shared_ptr<Graph>& graph) {
   return changed;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

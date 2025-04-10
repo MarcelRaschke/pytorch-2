@@ -3,8 +3,7 @@
 #include <ATen/ATen.h>
 #include <torch/csrc/jit/runtime/static/impl.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // The following class facilitates code reuse between ProcessedNodeInputWrapper
 // and ProcessedNodeOutputWrapper via CRTP
@@ -27,7 +26,7 @@ class ProcessedNodeWrapperBase {
         : container_(container), idx_(start_idx) {}
 
     ProcessedNodeWrapperBaseIter& operator++() {
-      DCHECK_NE(idx_, container_->size());
+      TORCH_DCHECK_NE(idx_, container_->size());
       ++idx_;
       return *this;
     }
@@ -51,7 +50,7 @@ class ProcessedNodeWrapperBase {
     friend bool operator==(
         ProcessedNodeWrapperBaseIter lhs,
         ProcessedNodeWrapperBaseIter rhs) {
-      DCHECK_EQ(lhs.container_, rhs.container_);
+      TORCH_DCHECK_EQ(lhs.container_, rhs.container_);
       return lhs.idx_ == rhs.idx_;
     }
 
@@ -129,40 +128,52 @@ class ProcessedNodeWrapperBase {
 class ProcessedNodeInputWrapper
     : public ProcessedNodeWrapperBase<ProcessedNodeInputWrapper> {
  public:
-  // The last `num_ignored_elems` elements are not considered. This is useful
-  // for ops where only the first N elements are tensors (N < inputs.size())
+  // The last `back_elements_ignored` elements are not considered.
+  // Same for the first `front_elements_ignored` elements.
+  // This is useful for ops where
+  // only the first N elements are tensors (N < inputs.size()).
   // For instance, the last argument to VarStack is an integer dimension.
   explicit ProcessedNodeInputWrapper(
       ProcessedNode& pnode,
-      size_t num_ignored_elems = 1)
+      size_t front_elements_ignored = 0,
+      size_t back_elements_ignored = 1)
       : ProcessedNodeWrapperBase<ProcessedNodeInputWrapper>(pnode),
-        num_ignored_elems_(num_ignored_elems) {}
+        front_elements_ignored_(front_elements_ignored),
+        back_elements_ignored_(back_elements_ignored) {
+    TORCH_CHECK(front_elements_ignored_ <= pnode_.num_inputs());
+    TORCH_CHECK(
+        back_elements_ignored_ <=
+        pnode_.num_inputs() - front_elements_ignored_);
+  }
 
   size_t size() const {
-    return pnode_.num_inputs() - num_ignored_elems_;
+    return pnode_.num_inputs() - back_elements_ignored_ -
+        front_elements_ignored_;
   }
 
   const at::Tensor& operator[](size_t idx) const {
     TORCH_CHECK(idx < size());
-    return pnode_.Input(idx).toTensor();
+    return pnode_.Input(front_elements_ignored_ + idx).toTensor();
   }
 
   const at::Tensor& front() const {
     TORCH_CHECK(
         !empty(),
         "Attempted to access front() of empty ProcessedNodeInputWrapper");
-    return pnode_.Input(0).toTensor();
+    return pnode_.Input(front_elements_ignored_).toTensor();
   }
 
   const at::Tensor& back() const {
     TORCH_CHECK(
         !empty(),
         "Attempted to access back() of empty ProcessedNodeInputWrapper");
-    return pnode_.Input(size() - 1).toTensor();
+    return pnode_.Input(pnode_.num_inputs() - back_elements_ignored_ - 1)
+        .toTensor();
   }
 
  private:
-  size_t num_ignored_elems_;
+  size_t front_elements_ignored_;
+  size_t back_elements_ignored_;
 };
 
 // Similar to ProcessedNodeInputWrapper, but wraps outputs and allows for
@@ -197,5 +208,4 @@ class ProcessedNodeOutputWrapper
   }
 };
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

@@ -1,14 +1,31 @@
-#include <ATen/ATen.h>
-#include <ATen/NativeFunctions.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
+#include <ATen/TensorOperators.h>
+#include <ATen/TensorSubclassLikeUtils.h>
 
-namespace at {
-namespace native {
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/complex.h>
+#include <ATen/ops/corrcoef_native.h>
+#include <ATen/ops/cov.h>
+#include <ATen/ops/cov_native.h>
+#include <ATen/ops/imag.h>
+#include <ATen/ops/mm.h>
+#include <ATen/ops/real.h>
+#include <ATen/ops/scalar_tensor.h>
+#include <ATen/ops/sqrt.h>
+#include <ATen/ops/true_divide.h>
+#endif
+
+namespace at::native {
 
 Tensor cov(
     const Tensor& self,
     int64_t correction,
-    const c10::optional<Tensor>& fweights,
-    const c10::optional<Tensor>& aweights) {
+    const std::optional<Tensor>& fweights,
+    const std::optional<Tensor>& aweights) {
   constexpr int64_t OBSERVATIONS_DIM = 1;
 
   TORCH_CHECK(
@@ -47,7 +64,7 @@ Tensor cov(
         " != ",
         num_observations);
     TORCH_CHECK(
-        num_observations == 0 || w.min().ge(0).item<bool>(),
+        num_observations == 0 || at::is_scalar_tensor_true(w.min().ge(0)),
         "cov(): fweights cannot be negative");
   }
 
@@ -70,7 +87,7 @@ Tensor cov(
         " != ",
         num_observations);
     TORCH_CHECK(
-        num_observations == 0 || aw.min().ge(0).item<bool>(),
+        num_observations == 0 || at::is_scalar_tensor_true(aw.min().ge(0)),
         "cov(): aweights cannot be negative");
     w = w.defined() ? w * aw : aw;
   }
@@ -81,7 +98,7 @@ Tensor cov(
       : at::scalar_tensor(num_observations, in.options().dtype(kLong));
 
   TORCH_CHECK(
-      !w.defined() || w_sum.ne(0).item<bool>(),
+      !w.defined() || at::is_scalar_tensor_true(w_sum.ne(0)),
       "cov(): weights sum to zero, can't be normalized");
 
   const auto avg = (w.defined() ? in * w : in).sum(OBSERVATIONS_DIM) / w_sum;
@@ -95,8 +112,8 @@ Tensor cov(
     norm_factor = w_sum - correction;
   }
 
-  if (norm_factor.le(0).item<bool>()) {
-    TORCH_WARN("cov(): degrees of freedom is <= 0");
+  if (at::is_scalar_tensor_true(norm_factor.le(0))) {
+    TORCH_WARN("cov(): degrees of freedom is <= 0. Correction should be strictly less than the number of observations.");
     norm_factor.zero_();
   }
 
@@ -121,7 +138,7 @@ Tensor corrcoef(const Tensor& self) {
   }
 
   // normalize covariance
-  const auto d = c.diag();
+  const auto d = c.diagonal();
   const auto stddev = at::sqrt(d.is_complex() ? at::real(d) : d);
   c = c / stddev.view({-1, 1});
   c = c / stddev.view({1, -1});
@@ -133,5 +150,4 @@ Tensor corrcoef(const Tensor& self) {
       : c.clip(-1, 1);
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native

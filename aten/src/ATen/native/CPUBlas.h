@@ -1,14 +1,14 @@
 #pragma once
 
+#include <ATen/OpMathType.h>
 #include <ATen/native/DispatchStub.h>
 #include <ATen/native/TransposeType.h>
 #include <c10/util/complex.h>
 #include <c10/core/ScalarType.h>
 #include <c10/core/Scalar.h>
 
-namespace at {
-namespace native {
-namespace cpublas {
+
+namespace at::native::cpublas {
 
 namespace internal {
 void normalize_last_dims(
@@ -27,16 +27,16 @@ using gemm_fn = void(*)(
     const Scalar& beta,
     void *c, int64_t ldc);
 
-DECLARE_DISPATCH(gemm_fn, gemm_stub);
+DECLARE_DISPATCH(gemm_fn, gemm_stub)
 
 template <typename scalar_t>
 void gemm(
     TransposeType transa, TransposeType transb,
     int64_t m, int64_t n, int64_t k,
-    scalar_t alpha,
+    at::opmath_type<scalar_t> alpha,
     const scalar_t *a, int64_t lda,
     const scalar_t *b, int64_t ldb,
-    scalar_t beta,
+    at::opmath_type<scalar_t> beta,
     scalar_t *c, int64_t ldc) {
   internal::normalize_last_dims(transa, transb, m, n, k, &lda, &ldb, &ldc);
   gemm_stub(
@@ -62,17 +62,41 @@ void gemm(
     float beta,
     float *c, int64_t ldc);
 
-#ifdef BLAS_HAS_SBGEMM
-using _bfloat16_t = decltype(c10::impl::ScalarTypeToCPPType<at::kBFloat16>::t);
 void gemm(
     TransposeType transa, TransposeType transb,
     int64_t m, int64_t n, int64_t k,
-    _bfloat16_t alpha,
-    const _bfloat16_t *a, int64_t lda,
-    const _bfloat16_t *b, int64_t ldb,
-    _bfloat16_t beta,
-    _bfloat16_t *c, int64_t ldc);
-#endif // BLAS_HAS_SBGEMM
+    float alpha,
+    const at::BFloat16 *a, int64_t lda,
+    const at::BFloat16 *b, int64_t ldb,
+    float beta,
+    at::BFloat16 *c, int64_t ldc);
+
+void gemm(
+    TransposeType transa, TransposeType transb,
+    int64_t m, int64_t n, int64_t k,
+    const float alpha,
+    const at::BFloat16 *a, int64_t lda,
+    const at::BFloat16 *b, int64_t ldb,
+    const float beta,
+    float *c, int64_t ldc);
+
+void gemm(
+    TransposeType transa, TransposeType transb,
+    int64_t m, int64_t n, int64_t k,
+    float alpha,
+    const at::Half *a, int64_t lda,
+    const at::Half *b, int64_t ldb,
+    float beta,
+    at::Half *c, int64_t ldc);
+
+void gemm(
+    TransposeType transa, TransposeType transb,
+    int64_t m, int64_t n, int64_t k,
+    const float alpha,
+    const at::Half *a, int64_t lda,
+    const at::Half *b, int64_t ldb,
+    const float beta,
+    float *c, int64_t ldc);
 
 void gemm(
     TransposeType transa, TransposeType transb,
@@ -123,7 +147,7 @@ void gemm_batched_with_stride(
 
 using axpy_fn = void(*)(at::ScalarType type, int64_t n, const Scalar& a, const void *x, int64_t incx, void *y, int64_t incy);
 
-DECLARE_DISPATCH(axpy_fn, axpy_stub);
+DECLARE_DISPATCH(axpy_fn, axpy_stub)
 
 template<typename scalar_t>
 void axpy(int64_t n, scalar_t a, const scalar_t *x, int64_t incx, scalar_t *y, int64_t incy){
@@ -144,7 +168,7 @@ void axpy(int64_t n, c10::complex<float> a, const c10::complex<float> *x, int64_
 
 using copy_fn = void(*)(at::ScalarType type, int64_t n, const void *x, int64_t incx, void *y, int64_t incy);
 
-DECLARE_DISPATCH(copy_fn, copy_stub);
+DECLARE_DISPATCH(copy_fn, copy_stub)
 
 template<typename scalar_t>
 void copy(int64_t n, const scalar_t *x, int64_t incx, scalar_t *y, int64_t incy) {
@@ -163,4 +187,93 @@ void copy(int64_t n, const float *x, int64_t incx, float *y, int64_t incy);
 void copy(int64_t n, const c10::complex<double> *x, int64_t incx, c10::complex<double> *y, int64_t incy);
 void copy(int64_t n, const c10::complex<float> *x, int64_t incx, c10::complex<float> *y, int64_t incy);
 
-}}}  // namespace at::native::cpublas
+// Batch-reduce GEMM
+// Operates by the following formula:
+// C = SUM(A[i] x B[i]) + C if add_C is true, i = 0 to batch size
+// A Base pointer to a tensor A.
+// B Base pointer to a tensor B.
+// C Pointer to a tensor C (accumulation buffer).
+// Note only batch size 1 is used currently
+TORCH_API void brgemm(
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t ld_a,
+    int64_t ld_b,
+    int64_t ld_c,
+    const bool add_C,
+    const at::Half* A,
+    const at::Half* B,
+    float* C,
+    bool is_vnni = true);
+
+TORCH_API void brgemm(
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t ld_a,
+    int64_t ld_b,
+    int64_t ld_c,
+    const bool add_C,
+    const at::BFloat16* A,
+    const at::BFloat16* B,
+    float* C,
+    bool is_vnni = true);
+
+TORCH_API void brgemm(
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t ld_a,
+    int64_t ld_b,
+    int64_t ld_c,
+    const bool add_C,
+    const float* A,
+    const float* B,
+    float* C,
+    bool is_vnni = false);
+
+TORCH_API void brgemm(
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t ld_a,
+    int64_t ld_b,
+    int64_t ld_c,
+    const bool add_C,
+    const unsigned char* A,
+    const unsigned char* B,
+    int32_t* C,
+    bool is_vnni = true);
+
+TORCH_API void brgemm(
+    int64_t M,
+    int64_t N,
+    int64_t K,
+    int64_t ld_a,
+    int64_t ld_b,
+    int64_t ld_c,
+    const bool add_C,
+    const unsigned char* A,
+    const signed char* B,
+    int32_t* C,
+    bool is_vnni = true);
+
+// Release brgemm hardware context
+TORCH_API void brgemm_release(bool is_vnni = true);
+
+// Pack B matrix to get better performance if needed
+TORCH_API void pack(
+    int64_t K,
+    int64_t N,
+    int64_t ld_in,
+    int64_t ld_out,
+    ScalarType dt_in,
+    ScalarType dt_out,
+    const void* in,
+    void* out);
+
+// Whether pack is supported in the platform.
+TORCH_API bool could_pack(ScalarType dt_in);
+
+} // namespace at::native::cpublas

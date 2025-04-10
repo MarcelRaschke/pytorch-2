@@ -9,9 +9,7 @@
 #include <torch/csrc/jit/python/module_python.h>
 #include <torch/csrc/jit/python/pybind_utils.h>
 
-namespace torch {
-namespace distributed {
-namespace rpc {
+namespace torch::distributed::rpc {
 
 /////////////////////  Pickle/Unpickle Helplers ////////////////////////////
 
@@ -56,7 +54,7 @@ RRefForkData fromPyTuple(const py::tuple& pyTuple) {
 TypePtr tryInferTypeWithTypeHint(
     const py::object& value,
     const py::object& type_hint) {
-  // If the py::object to be contained by the RRef is a ScripModule, we enforce
+  // If the py::object to be contained by the RRef is a ScriptModule, we enforce
   // users to specify its ModuleInterface type.
   if (auto module = jit::as_module(value)) {
     TORCH_CHECK(
@@ -101,7 +99,7 @@ TypePtr tryInferTypeWithTypeHint(
   }
 
   // NB: `jit::tryToInferType(..)` infers types including ScriptClass, but
-  // excluding ScripModule.
+  // excluding ScriptModule.
   jit::InferredType type_inferred = jit::tryToInferType(value);
   if (type_inferred.success()) {
     // If we could infer the type from the pyobject, we create
@@ -119,7 +117,7 @@ TypePtr tryInferTypeWithTypeHint(
 ///////////////////////////  PyRRef  //////////////////////////////////
 
 PyRRef::PyRRef(c10::intrusive_ptr<RRef> rref)
-    : rref_(std::move(rref)), profilingFuture_(c10::nullopt) {
+    : rref_(std::move(rref)), profilingFuture_(std::nullopt) {
   TORCH_CHECK(rref_, "PyRRef must not wrap nullptr");
   C10_LOG_API_USAGE_ONCE("torch.distributed.rref");
 }
@@ -139,8 +137,10 @@ PyRRef::PyRRef(const py::object& value, const py::object& type_hint)
         return rref;
       }()) {}
 
+// NOLINTNEXTLINE(bugprone-exception-escape)
 PyRRef::~PyRRef() {
   if (type_.has_value()) {
+    pybind11::gil_scoped_acquire ag;
     (*type_).dec_ref();
     // explicitly setting PyObject* to nullptr to prevent py::object's dtor to
     // decref on the PyObject again.
@@ -362,6 +362,4 @@ void PyRRef::backward(
   }
 }
 
-} // namespace rpc
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::rpc

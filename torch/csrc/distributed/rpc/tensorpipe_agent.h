@@ -6,9 +6,10 @@
 #include <thread>
 
 #include <c10/core/thread_pool.h>
-#include <c10d/PrefixStore.hpp>
-#include <c10d/Store.hpp>
+#include <torch/csrc/distributed/c10d/PrefixStore.hpp>
+#include <torch/csrc/distributed/c10d/Store.hpp>
 #include <torch/csrc/distributed/rpc/rpc_agent.h>
+#include <utility>
 
 // Forward-declare the TensorPipe classes we need, to avoid including its
 // headers in PyTorch's ones and thus have it become a public dependency.
@@ -31,9 +32,7 @@ class Context;
 
 } // namespace tensorpipe
 
-namespace torch {
-namespace distributed {
-namespace rpc {
+namespace torch::distributed::rpc {
 
 // These priorities instruct TensorPipe on which transport/channel to pick
 // during handshake. Higher priorities will take precedence over lower ones.
@@ -66,27 +65,27 @@ struct TORCH_API TransportRegistration {
   std::string address;
 };
 
-C10_DECLARE_REGISTRY(TensorPipeTransportRegistry, TransportRegistration);
+TORCH_DECLARE_REGISTRY(TensorPipeTransportRegistry, TransportRegistration);
 
 struct TORCH_API ChannelRegistration {
   std::shared_ptr<tensorpipe::channel::Context> channel;
   int64_t priority;
 };
 
-C10_DECLARE_REGISTRY(TensorPipeChannelRegistry, ChannelRegistration);
+TORCH_DECLARE_REGISTRY(TensorPipeChannelRegistry, ChannelRegistration);
 
 constexpr auto kDefaultNumWorkerThreads = 16;
 
 struct TORCH_API TensorPipeRpcBackendOptions : public RpcBackendOptions {
   TensorPipeRpcBackendOptions(
       int numWorkerThreads,
-      optional<std::vector<std::string>> transports,
-      optional<std::vector<std::string>> channels,
+      std::optional<std::vector<std::string>> transports,
+      std::optional<std::vector<std::string>> channels,
       float rpc_timeout,
       std::string init_method,
       std::unordered_map<std::string, DeviceMap> device_maps = {},
       std::vector<c10::Device> devices = {})
-      : RpcBackendOptions(rpc_timeout, init_method),
+      : RpcBackendOptions(rpc_timeout, std::move(init_method)),
         numWorkerThreads(numWorkerThreads),
         transports(std::move(transports)),
         channels(std::move(channels)),
@@ -97,8 +96,8 @@ struct TORCH_API TensorPipeRpcBackendOptions : public RpcBackendOptions {
         "num_worker_threads must be positive, got ",
         numWorkerThreads);
 
-    if (transports.has_value()) {
-      for (const std::string& transportName : transports.value()) {
+    if (this->transports.has_value()) {
+      for (const std::string& transportName : this->transports.value()) {
         TORCH_CHECK(
             TensorPipeTransportRegistry()->Has(transportName),
             "Unknown transport: ",
@@ -106,8 +105,8 @@ struct TORCH_API TensorPipeRpcBackendOptions : public RpcBackendOptions {
       }
     }
 
-    if (channels.has_value()) {
-      for (const std::string& channelName : channels.value()) {
+    if (this->channels.has_value()) {
+      for (const std::string& channelName : this->channels.value()) {
         TORCH_CHECK(
             TensorPipeChannelRegistry()->Has(channelName),
             "Unknown channel: ",
@@ -135,8 +134,10 @@ struct TORCH_API TensorPipeRpcBackendOptions : public RpcBackendOptions {
   }
 
   int numWorkerThreads;
-  const optional<std::vector<std::string>> transports;
-  const optional<std::vector<std::string>> channels;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  const std::optional<std::vector<std::string>> transports;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  const std::optional<std::vector<std::string>> channels;
   std::unordered_map<std::string, DeviceMap> deviceMaps;
   std::vector<c10::Device> devices;
 };
@@ -165,7 +166,7 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
       const c10::intrusive_ptr<::c10d::Store>& store,
       std::string selfName,
       worker_id_t selfId,
-      int worldSize,
+      std::optional<int> worldSize,
       TensorPipeRpcBackendOptions opts,
       std::unordered_map<std::string, DeviceMap> reverseDeviceMaps,
       std::vector<c10::Device> devices,
@@ -182,8 +183,8 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
 
   // join() and sync() would be deprecated -
   // https://github.com/pytorch/pytorch/issues/27647
-  void join(bool shutdown = false) override;
-  void sync() override{};
+  void join(bool shutdown = false, float timeout = 0) override;
+  void sync() override {}
   void startImpl() override;
   void shutdownImpl() override;
 
@@ -192,10 +193,19 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
   const WorkerInfo& getWorkerInfo(const std::string& workerName) const override;
   const WorkerInfo& getWorkerInfo(worker_id_t workerId) const override;
   std::vector<WorkerInfo> getWorkerInfos() const override;
+  void updateGroupMembership(
+      const WorkerInfo& workerInfo,
+      const std::vector<c10::Device>& devices,
+      const std::unordered_map<std::string, DeviceMap>& reverseDeviceMaps,
+      bool isJoin);
 
   std::unordered_map<std::string, std::string> getMetrics() override;
 
   void addGilWaitTime(const std::chrono::microseconds gilWaitTime) override;
+
+  TensorPipeRpcBackendOptions getBackendOptions() const;
+
+  const c10::intrusive_ptr<::c10d::Store> getStore() const;
 
   DeviceMap getDeviceMap(const WorkerInfo& dest) const override;
 
@@ -216,13 +226,16 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
   size_t numPendingResponses();
   size_t messageIdToTimeoutMapSize();
 
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
+  const bool isStaticGroup_;
+
  protected:
   // TensorPipe write function that could be used to write response
   // messages by server, and write request messages by client. This
   // is a protected method since it is overwritten by FaultyTensorPipeAgent
   virtual void pipeWrite(
       const std::shared_ptr<tensorpipe::Pipe>&,
-      c10::intrusive_ptr<Message> message,
+      const c10::intrusive_ptr<Message>& message,
       std::vector<c10::Device>&& devices,
       std::vector<c10::Stream> streams,
       std::function<void(const tensorpipe::Error&)>) noexcept;
@@ -233,9 +246,15 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
   void removeFromTimeoutMap(uint64_t messageId);
 
   // Populates workerIdToInfo_ and workerNameToInfo_ using addressStore_
-  void prepareNames();
+  void prepareNames(bool isStaticGroup);
+
+  // Check the static group attribute with the value set in store
+  void checkAndSetStaticGroup(const c10::intrusive_ptr<::c10d::Store>& store);
 
   const std::string& findWorkerURL(const WorkerInfo& worker) const;
+
+  // Only use for Dynamic RPC groups, method to have worker leave group
+  void leaveGroup();
 
   // TensorPipe read function that could be used to read response messages
   // by client, and read request messages by server.
@@ -297,8 +316,8 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
   // TODO: To achieve better performance we can have a pipe pool per
   // client that can be configured using RpcBackendOptions.
   struct ClientPipe {
-    // NOLINTNEXTLINE(modernize-pass-by-value)
-    explicit ClientPipe(std::shared_ptr<tensorpipe::Pipe> pipe) : pipe_(pipe) {}
+    explicit ClientPipe(std::shared_ptr<tensorpipe::Pipe> pipe)
+        : pipe_(std::move(pipe)) {}
     std::shared_ptr<tensorpipe::Pipe> pipe_;
     mutable std::mutex mutex_;
     bool inError_{false};
@@ -307,12 +326,16 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
         pendingResponseMessage_;
   };
 
+  const c10::intrusive_ptr<::c10d::Store> store_;
+
   const TensorPipeRpcBackendOptions opts_;
-  const std::unordered_map<std::string, DeviceMap> reverseDeviceMaps_;
+  // For dynamic RPC, the reverse device maps are updated whenever a new rank
+  // joins or leaves the group
+  std::unordered_map<std::string, DeviceMap> reverseDeviceMaps_;
   // Local devices used by this agent. If application didn't specify this
   // field, it will be initialized using corresponding local devices in
   // opts_.deviceMaps and reverseDeviceMaps_;
-  const std::vector<c10::Device> devices_;
+  std::vector<c10::Device> devices_;
 
   ThreadPool threadPool_;
   std::shared_ptr<tensorpipe::Context> context_;
@@ -331,19 +354,17 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
   // Store keys that will used to count joined processes and active calls during
   // the shutdown process
   ::c10d::PrefixStore shutdownStore_;
-  const int worldSize_;
-
+  int worldSize_ = 0;
   std::atomic<uint64_t> nextMessageID_{0};
 
   // Metadata used for tracking of whether certain RPCs have timed out or not.
   struct TimeoutMessageMetadata {
     TimeoutMessageMetadata(
         uint64_t messageId_,
-        // NOLINTNEXTLINE(modernize-pass-by-value)
         std::shared_ptr<AtomicJitFuture> responseFuture_,
         std::chrono::milliseconds timeout_)
         : messageId(messageId_),
-          responseFuture(responseFuture_),
+          responseFuture(std::move(responseFuture_)),
           timeout(timeout_) {}
     uint64_t messageId;
     std::shared_ptr<AtomicJitFuture> responseFuture;
@@ -410,6 +431,32 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
   // Mutex to guard timeSeriesMetrics_
   std::mutex metricsMutex_;
 
+  // Custom lock guard used to check if the RPC group is dynamic and lock the
+  // mutex if so
+  struct GroupMembershipLockGuard {
+    GroupMembershipLockGuard(std::mutex& mutex, bool isStaticGroup)
+        : ref_(mutex), isStaticGroup_(isStaticGroup) {
+      if (isStaticGroup_) {
+        ref_.lock();
+      }
+    }
+
+    ~GroupMembershipLockGuard() {
+      if (isStaticGroup_) {
+        ref_.unlock();
+      }
+    }
+
+    GroupMembershipLockGuard(const GroupMembershipLockGuard&) = delete;
+
+   private:
+    std::mutex& ref_;
+    bool isStaticGroup_;
+  };
+  // Mutex to guard access to group membership data
+  // e.g. updates to (workerIdToInfo_, workerNameToInfo_, workerNameToURL_)
+  mutable std::mutex groupMembershipMutex_;
+
   // Map to Track Network Data
   NetworkDataDict networkData_;
   // Mutex to guard networkData_
@@ -443,8 +490,6 @@ class TORCH_API TensorPipeAgent : public RpcAgent {
       std::string errorMsg);
 };
 
-} // namespace rpc
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::rpc
 
 #endif // USE_TENSORPIPE

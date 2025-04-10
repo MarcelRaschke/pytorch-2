@@ -1,13 +1,12 @@
 #include <torch/csrc/jit/passes/onnx/preprocess_for_onnx.h>
 
+#include <ATen/ScalarOps.h>
 #include <c10/util/irange.h>
+
 #include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/passes/onnx/helper.h>
 
-#include <ATen/ScalarOps.h>
-
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace onnx {
 using namespace ::c10::onnx;
@@ -15,18 +14,18 @@ using namespace ::c10::onnx;
 
 namespace {
 
-at::optional<Node*> FindFusibleListUnpack(Node* n) {
+std::optional<Node*> FindFusibleListUnpack(Node* n) {
   // 1. number of outputs is restricted to 1.
   // 2. output is only used by prim::ListUnpack.
   if (n->outputs().size() != 1) {
-    return at::nullopt;
+    return std::nullopt;
   }
   if (n->output()->uses().size() != 1) {
-    return at::nullopt;
+    return std::nullopt;
   }
   auto listUnpackNode = n->output()->uses()[0].user;
   if (listUnpackNode->kind() != prim::ListUnpack) {
-    return at::nullopt;
+    return std::nullopt;
   }
   return listUnpackNode;
 }
@@ -53,7 +52,7 @@ at::optional<Node*> FindFusibleListUnpack(Node* n) {
 // graph(%input : Float(5, 4, 3, strides=[12, 3, 1])):
 //   %13 : int[] = prim::Constant[value=[2, 1, 2]]()
 //   %7 : int = prim::Constant[value=0]()
-//   %8 : int = prim::Constant[value=3]()  # Adding addtional input of value 3
+//   %8 : int = prim::Constant[value=3]()  # Adding additional input of value 3
 //      representing the number of outputs.
 //   %14 : Float(2, 4, 3, strides=[12, 3, 1]), %15 : Float(1, 4, 3, strides=[12,
 //      3, 1]), %16 : Float(2, 4, 3, strides=[12, 3, 1] =
@@ -165,7 +164,7 @@ static void ReplaceAddWithConcat(Block* b) {
 }
 
 // This pass also covers the case when the input to ListUnpack
-// is int[] comming from some other op than ListConstruct (like Slice or Shape)
+// is int[] coming from some other op than ListConstruct (like Slice or Shape)
 //
 // before the pass
 // graph(%x.1 : Float(2, 3, strides=[3, 1], requires_grad=0, device=cpu)):
@@ -229,5 +228,4 @@ void PreprocessForONNX(std::shared_ptr<Graph>& graph) {
   GRAPH_DUMP("After fuseListAndListUnpack: ", graph);
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

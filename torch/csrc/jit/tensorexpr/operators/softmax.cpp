@@ -1,14 +1,13 @@
 #include <torch/csrc/jit/tensorexpr/operators/softmax.h>
 
-namespace torch {
-namespace jit {
-namespace tensorexpr {
+namespace torch::jit::tensorexpr {
 
 using namespace torch::jit::tensorexpr;
 
 Tensor computeSoftmax(
     const std::vector<ArgValue>& inputs,
     const std::vector<ExprHandle>& outputShape,
+    const std::vector<ExprHandle>& outputStrides,
     bool log_softmax) {
   // Softmax is computed as follows:
   //    softmax(vi) = exp(vi) / sum(exp(vi))
@@ -43,10 +42,10 @@ Tensor computeSoftmax(
 
   // We do not handle None for dims (input 1) because that is supposed to
   // be deprecated.
-  TORCH_INTERNAL_ASSERT(c10::get_if<int64_t>(&inputs[1]));
+  TORCH_INTERNAL_ASSERT(std::get_if<int64_t>(&inputs[1]));
   int64_t rank = valueShape(inputs[0]).size();
   size_t softmax_dim =
-      normalizeAndCheckIndex(c10::get<int64_t>(inputs[1]), rank);
+      normalizeAndCheckIndex(std::get<int64_t>(inputs[1]), rank);
   std::vector<ExprHandle> non_softmax_dims;
   for (size_t i = 0; i < outputShape.size(); ++i) {
     if (i != softmax_dim) {
@@ -63,7 +62,7 @@ Tensor computeSoftmax(
   // appropriate position.
   auto move_softmax_dim_index_to_pos = [&](const ParameterList& indices) {
     std::vector<ExprHandle> new_indices;
-    for (auto ind : indices) {
+    for (const auto& ind : indices) {
       new_indices.push_back(ind);
     }
     for (size_t i = softmax_dim; i < indices.size() - 1; ++i) {
@@ -92,24 +91,28 @@ Tensor computeSoftmax(
     return new_indices;
   };
 
-  auto inp_buf = c10::get<BufHandle>(inputs[0]);
+  auto inp_buf = std::get<BufHandle>(inputs[0]);
 
   auto dtype = inp_buf.dtype();
-  if (auto d = c10::get_if<int64_t>(&inputs[2])) {
+  if (auto d = std::get_if<int64_t>(&inputs[2])) {
     dtype = ToDtype(static_cast<ScalarType>(*d));
   }
 
   auto max = Reduce(
       "aten_softmax_max",
       non_softmax_dims,
+      std::nullopt,
       Maximum(dtype),
       [&](ParameterList& indices) {
         return tensorOrConstant(
             inputs[0], move_softmax_dim_index_to_pos(indices));
       },
       {outputShape[softmax_dim]});
-  auto e =
-      Compute("aten_softmax_exp", outputShape, [&](ParameterList& indices) {
+  auto e = Compute(
+      "aten_softmax_exp",
+      outputShape,
+      std::nullopt,
+      [&](ParameterList& indices) {
         auto inp = tensorOrConstant(
             inputs[0], convert_indices_to_expr_handle(indices));
         return exp(inp - max.load(remove_softmax_dim_index(indices)));
@@ -117,14 +120,15 @@ Tensor computeSoftmax(
   auto sum = Reduce(
       "aten_softmax_sum",
       non_softmax_dims,
+      std::nullopt,
       Sum(),
       [&](ParameterList& indices) {
         return e.load(move_softmax_dim_index_to_pos(indices));
       },
       {outputShape[softmax_dim]});
   if (!log_softmax) {
-    auto result =
-        Compute("aten_softmax", outputShape, [&](ParameterList& indices) {
+    auto result = Compute(
+        "aten_softmax", outputShape, std::nullopt, [&](ParameterList& indices) {
           return e.load(indices) / sum.load(remove_softmax_dim_index(indices));
         });
     return Tensor(
@@ -134,11 +138,15 @@ Tensor computeSoftmax(
   }
 
   auto log_sum = Compute(
-      "aten_softmax_log_sum", non_softmax_dims, [&](ParameterList& indices) {
-        return log(sum.load(indices));
-      });
-  auto result =
-      Compute("aten_log_softmax", outputShape, [&](ParameterList& indices) {
+      "aten_softmax_log_sum",
+      non_softmax_dims,
+      std::nullopt,
+      [&](ParameterList& indices) { return log(sum.load(indices)); });
+  auto result = Compute(
+      "aten_log_softmax",
+      outputShape,
+      std::nullopt,
+      [&](ParameterList& indices) {
         auto inp = tensorOrConstant(
             inputs[0], convert_indices_to_expr_handle(indices));
         auto non_softmax_indices = remove_softmax_dim_index(indices);
@@ -151,6 +159,4 @@ Tensor computeSoftmax(
           {max.stmt(), e.stmt(), sum.stmt(), log_sum.stmt(), result.stmt()})));
 }
 
-} // namespace tensorexpr
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::tensorexpr

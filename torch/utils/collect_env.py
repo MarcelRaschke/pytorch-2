@@ -1,9 +1,10 @@
-from __future__ import print_function
+# mypy: allow-untyped-defs
 
 # Unlike the rest of the PyTorch this file must be python2 compliant.
 # This script outputs relevant system environment info
-# Run it with `python collect_env.py`.
+# Run it with `python collect_env.py` or `python -m torch.utils.collect_env`
 import datetime
+import json
 import locale
 import re
 import subprocess
@@ -32,6 +33,7 @@ SystemEnv = namedtuple('SystemEnv', [
     'python_platform',
     'is_cuda_available',
     'cuda_runtime_version',
+    'cuda_module_loading',
     'nvidia_driver_version',
     'nvidia_gpu_models',
     'cudnn_version',
@@ -43,13 +45,53 @@ SystemEnv = namedtuple('SystemEnv', [
     'miopen_runtime_version',
     'caching_allocator_config',
     'is_xnnpack_available',
+    'cpu_info',
 ])
+
+COMMON_PATTERNS = [
+    "torch",
+    "numpy",
+    "triton",
+    "optree",
+]
+
+NVIDIA_PATTERNS = [
+    "cuda-cudart",
+    "cuda-cupti",
+    "cuda-libraries",
+    "cuda-opencl",
+    "cuda-nvrtc",
+    "cuda-runtime",
+    "cublas",
+    "cudnn",
+    "cufft",
+    "curand",
+    "cusolver",
+    "cusparse",
+    "nccl",
+    "nvjitlink",
+    "nvtx",
+]
+
+CONDA_PATTERNS = [
+    "cudatoolkit",
+    "soumith",
+    "mkl",
+    "magma",
+]
+
+PIP_PATTERNS = [
+    "mypy",
+    "flake8",
+    "onnx",
+]
 
 
 def run(command):
-    """Returns (return-code, stdout, stderr)"""
+    """Return (return-code, stdout, stderr)."""
+    shell = True if type(command) is str else False
     p = subprocess.Popen(command, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, shell=True)
+                         stderr=subprocess.PIPE, shell=shell)
     raw_output, raw_err = p.communicate()
     rc = p.returncode
     if get_platform() == 'win32':
@@ -62,7 +104,7 @@ def run(command):
 
 
 def run_and_read_all(run_lambda, command):
-    """Runs command using run_lambda; reads and returns entire output if rc is 0"""
+    """Run command using run_lambda; reads and returns entire output if rc is 0."""
     rc, out, _ = run_lambda(command)
     if rc != 0:
         return None
@@ -70,7 +112,7 @@ def run_and_read_all(run_lambda, command):
 
 
 def run_and_parse_first_match(run_lambda, command, regex):
-    """Runs command using run_lambda, returns the first regex match if it exists"""
+    """Run command using run_lambda, returns the first regex match if it exists."""
     rc, out, _ = run_lambda(command)
     if rc != 0:
         return None
@@ -80,28 +122,27 @@ def run_and_parse_first_match(run_lambda, command, regex):
     return match.group(1)
 
 def run_and_return_first_line(run_lambda, command):
-    """Runs command using run_lambda and returns first line if output is not empty"""
+    """Run command using run_lambda and returns first line if output is not empty."""
     rc, out, _ = run_lambda(command)
     if rc != 0:
         return None
     return out.split('\n')[0]
 
 
-def get_conda_packages(run_lambda):
-    if get_platform() == 'win32':
-        system_root = os.environ.get('SYSTEMROOT', 'C:\\Windows')
-        findstr_cmd = os.path.join(system_root, 'System32', 'findstr')
-        grep_cmd = r'{} /R "torch numpy cudatoolkit soumith mkl magma mypy"'.format(findstr_cmd)
-    else:
-        grep_cmd = r'grep "torch\|numpy\|cudatoolkit\|soumith\|mkl\|magma\|mypy"'
+def get_conda_packages(run_lambda, patterns=None):
+    if patterns is None:
+        patterns = CONDA_PATTERNS + COMMON_PATTERNS + NVIDIA_PATTERNS
     conda = os.environ.get('CONDA_EXE', 'conda')
-    out = run_and_read_all(run_lambda, conda + ' list | ' + grep_cmd)
+    out = run_and_read_all(run_lambda, "{} list".format(conda))
     if out is None:
         return out
-    # Comment starting at beginning of line
-    comment_regex = re.compile(r'^#.*\n')
-    return re.sub(comment_regex, '', out)
 
+    return "\n".join(
+        line
+        for line in out.splitlines()
+        if not line.startswith("#")
+        and any(name in line for name in patterns)
+    )
 
 def get_gcc_version(run_lambda):
     return run_and_parse_first_match(run_lambda, 'gcc --version', r'gcc (.*)')
@@ -126,7 +167,15 @@ def get_nvidia_driver_version(run_lambda):
 def get_gpu_info(run_lambda):
     if get_platform() == 'darwin' or (TORCH_AVAILABLE and hasattr(torch.version, 'hip') and torch.version.hip is not None):
         if TORCH_AVAILABLE and torch.cuda.is_available():
-            return torch.cuda.get_device_name(None)
+            if torch.version.hip is not None:
+                prop = torch.cuda.get_device_properties(0)
+                if hasattr(prop, "gcnArchName"):
+                    gcnArch = " ({})".format(prop.gcnArchName)
+                else:
+                    gcnArch = "NoGCNArchNameOnOldPyTorch"
+            else:
+                gcnArch = ""
+            return torch.cuda.get_device_name(None) + gcnArch
         return None
     smi = get_nvidia_smi()
     uuid_regex = re.compile(r' \(UUID: .+?\)')
@@ -142,7 +191,7 @@ def get_running_cuda_version(run_lambda):
 
 
 def get_cudnn_version(run_lambda):
-    """This will return a list of libcudnn.so; it's hard to tell which one is being used"""
+    """Return a list of libcudnn.so; it's hard to tell which one is being used."""
     if get_platform() == 'win32':
         system_root = os.environ.get('SYSTEMROOT', 'C:\\Windows')
         cuda_path = os.environ.get('CUDA_PATH', "%CUDA_PATH%")
@@ -171,7 +220,7 @@ def get_cudnn_version(run_lambda):
     if not files_set:
         return None
     # Alphabetize the result because the order is non-deterministic otherwise
-    files = list(sorted(files_set))
+    files = sorted(files_set)
     if len(files) == 1:
         return files[0]
     result = '\n'.join(files)
@@ -194,6 +243,115 @@ def get_nvidia_smi():
     return smi
 
 
+# example outputs of CPU infos
+#  * linux
+#    Architecture:            x86_64
+#      CPU op-mode(s):        32-bit, 64-bit
+#      Address sizes:         46 bits physical, 48 bits virtual
+#      Byte Order:            Little Endian
+#    CPU(s):                  128
+#      On-line CPU(s) list:   0-127
+#    Vendor ID:               GenuineIntel
+#      Model name:            Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz
+#        CPU family:          6
+#        Model:               106
+#        Thread(s) per core:  2
+#        Core(s) per socket:  32
+#        Socket(s):           2
+#        Stepping:            6
+#        BogoMIPS:            5799.78
+#        Flags:               fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr
+#                             sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl
+#                             xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq monitor ssse3 fma cx16
+#                             pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand
+#                             hypervisor lahf_lm abm 3dnowprefetch invpcid_single ssbd ibrs ibpb stibp ibrs_enhanced
+#                             fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap
+#                             avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1
+#                             xsaves wbnoinvd ida arat avx512vbmi pku ospke avx512_vbmi2 gfni vaes vpclmulqdq
+#                             avx512_vnni avx512_bitalg tme avx512_vpopcntdq rdpid md_clear flush_l1d arch_capabilities
+#    Virtualization features:
+#      Hypervisor vendor:     KVM
+#      Virtualization type:   full
+#    Caches (sum of all):
+#      L1d:                   3 MiB (64 instances)
+#      L1i:                   2 MiB (64 instances)
+#      L2:                    80 MiB (64 instances)
+#      L3:                    108 MiB (2 instances)
+#    NUMA:
+#      NUMA node(s):          2
+#      NUMA node0 CPU(s):     0-31,64-95
+#      NUMA node1 CPU(s):     32-63,96-127
+#    Vulnerabilities:
+#      Itlb multihit:         Not affected
+#      L1tf:                  Not affected
+#      Mds:                   Not affected
+#      Meltdown:              Not affected
+#      Mmio stale data:       Vulnerable: Clear CPU buffers attempted, no microcode; SMT Host state unknown
+#      Retbleed:              Not affected
+#      Spec store bypass:     Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+#      Spectre v1:            Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+#      Spectre v2:            Mitigation; Enhanced IBRS, IBPB conditional, RSB filling, PBRSB-eIBRS SW sequence
+#      Srbds:                 Not affected
+#      Tsx async abort:       Not affected
+#  * win32
+#    Architecture=9
+#    CurrentClockSpeed=2900
+#    DeviceID=CPU0
+#    Family=179
+#    L2CacheSize=40960
+#    L2CacheSpeed=
+#    Manufacturer=GenuineIntel
+#    MaxClockSpeed=2900
+#    Name=Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz
+#    ProcessorType=3
+#    Revision=27142
+#
+#    Architecture=9
+#    CurrentClockSpeed=2900
+#    DeviceID=CPU1
+#    Family=179
+#    L2CacheSize=40960
+#    L2CacheSpeed=
+#    Manufacturer=GenuineIntel
+#    MaxClockSpeed=2900
+#    Name=Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz
+#    ProcessorType=3
+#    Revision=27142
+
+def get_cpu_info(run_lambda):
+    rc, out, err = 0, '', ''
+    if get_platform() == 'linux':
+        rc, out, err = run_lambda('lscpu')
+    elif get_platform() == 'win32':
+        rc, out, err = run_lambda(
+            'powershell.exe "gwmi -Class Win32_Processor | Select-Object -Property Name,Manufacturer,Family,\
+            Architecture,ProcessorType,DeviceID,CurrentClockSpeed,MaxClockSpeed,L2CacheSize,L2CacheSpeed,Revision\
+            | ConvertTo-Json"'
+        )
+        if rc == 0:
+            lst = []
+            try:
+                obj = json.loads(out)
+                if type(obj) is list:
+                    for o in obj:
+                        lst.append("----------------------")
+                        lst.extend([f"{k}: {v}" for (k, v) in o.items()])
+                else:
+                    lst.extend([f"{k}: {v}" for (k, v) in obj.items()])
+            except ValueError as e:
+                lst.append(out)
+                lst.append(str(e))
+            out = "\n".join(lst)
+    elif get_platform() == 'darwin':
+        rc, out, err = run_lambda("sysctl -n machdep.cpu.brand_string")
+    cpu_info = 'None'
+    if rc == 0:
+        cpu_info = out
+    else:
+        cpu_info = err
+    return cpu_info
+
+
 def get_platform():
     if sys.platform.startswith('linux'):
         return 'linux'
@@ -212,10 +370,17 @@ def get_mac_version(run_lambda):
 
 
 def get_windows_version(run_lambda):
-    system_root = os.environ.get('SYSTEMROOT', 'C:\\Windows')
-    wmic_cmd = os.path.join(system_root, 'System32', 'Wbem', 'wmic')
-    findstr_cmd = os.path.join(system_root, 'System32', 'findstr')
-    return run_and_read_all(run_lambda, '{} os get Caption | {} /v Caption'.format(wmic_cmd, findstr_cmd))
+    ret = run_and_read_all(
+        run_lambda,
+        'powershell.exe "gwmi -Class Win32_OperatingSystem | Select-Object -Property Caption,\
+        OSArchitecture,Version | ConvertTo-Json"',
+    )
+    try:
+        obj = json.loads(ret)
+        ret = f'{obj["Caption"]} ({obj["Version"]} {obj["OSArchitecture"]})'
+    except ValueError as e:
+        ret += f"\n{str(e)}"
+    return ret
 
 
 def get_lsb_version(run_lambda):
@@ -269,35 +434,65 @@ def get_libc_version():
     return '-'.join(platform.libc_ver())
 
 
-def get_pip_packages(run_lambda):
-    """Returns `pip list` output. Note: will also find conda-installed pytorch
-    and numpy packages."""
-    # People generally have `pip` as `pip` or `pip3`
-    # But here it is incoved as `python -mpip`
-    def run_with_pip(pip):
-        if get_platform() == 'win32':
-            system_root = os.environ.get('SYSTEMROOT', 'C:\\Windows')
-            findstr_cmd = os.path.join(system_root, 'System32', 'findstr')
-            grep_cmd = r'{} /R "numpy torch mypy"'.format(findstr_cmd)
-        else:
-            grep_cmd = r'grep "torch\|numpy\|mypy"'
-        return run_and_read_all(run_lambda, pip + ' list --format=freeze | ' + grep_cmd)
+def get_pip_packages(run_lambda, patterns=None):
+    """Return `pip list` output. Note: will also find conda-installed pytorch and numpy packages."""
+    if patterns is None:
+        patterns = PIP_PATTERNS + COMMON_PATTERNS + NVIDIA_PATTERNS
 
     pip_version = 'pip3' if sys.version[0] == '3' else 'pip'
-    out = run_with_pip(sys.executable + ' -mpip')
 
-    return pip_version, out
+    os.environ['PIP_DISABLE_PIP_VERSION_CHECK'] = '1'
+    # People generally have pip as `pip` or `pip3`
+    # But here it is invoked as `python -mpip`
+    out = run_and_read_all(run_lambda, [sys.executable, '-mpip', 'list', '--format=freeze'])
+    filtered_out = '\n'.join(
+        line
+        for line in out.splitlines()
+        if any(name in line for name in patterns)
+    )
+
+    return pip_version, filtered_out
 
 
 def get_cachingallocator_config():
     ca_config = os.environ.get('PYTORCH_CUDA_ALLOC_CONF', '')
+    if not ca_config:
+        ca_config = os.environ.get('PYTORCH_HIP_ALLOC_CONF', '')
     return ca_config
 
+
+def get_cuda_module_loading_config():
+    if TORCH_AVAILABLE and torch.cuda.is_available():
+        torch.cuda.init()
+        config = os.environ.get('CUDA_MODULE_LOADING', '')
+        return config
+    else:
+        return "N/A"
+
+
 def is_xnnpack_available():
-    import torch.backends.xnnpack
-    return str(torch.backends.xnnpack.enabled)  # type: ignore[attr-defined]
+    if TORCH_AVAILABLE:
+        import torch.backends.xnnpack
+        return str(torch.backends.xnnpack.enabled)  # type: ignore[attr-defined]
+    else:
+        return "N/A"
 
 def get_env_info():
+    """
+    Collects environment information to aid in debugging.
+
+    The returned environment information contains details on torch version, is debug build
+    or not, cuda compiled version, gcc version, clang version, cmake version, operating
+    system, libc version, python version, python platform, CUDA availability, CUDA
+    runtime version, CUDA module loading config, GPU model and configuration, Nvidia
+    driver version, cuDNN version, pip version and versions of relevant pip and
+    conda packages, HIP runtime version, MIOpen runtime version,
+    Caching allocator config, XNNPACK availability and CPU information.
+
+    Returns:
+        SystemEnv (namedtuple): A tuple containining various environment details
+            and system information.
+    """
     run_lambda = run
     pip_version, pip_list_output = get_pip_packages(run_lambda)
 
@@ -309,9 +504,13 @@ def get_env_info():
         if not hasattr(torch.version, 'hip') or torch.version.hip is None:  # cuda version
             hip_compiled_version = hip_runtime_version = miopen_runtime_version = 'N/A'
         else:  # HIP version
+            def get_version_or_na(cfg, prefix):
+                _lst = [s.rsplit(None, 1)[-1] for s in cfg if prefix in s]
+                return _lst[0] if _lst else 'N/A'
+
             cfg = torch._C._show_config().split('\n')
-            hip_runtime_version = [s.rsplit(None, 1)[-1] for s in cfg if 'HIP Runtime' in s][0]
-            miopen_runtime_version = [s.rsplit(None, 1)[-1] for s in cfg if 'MIOpen' in s][0]
+            hip_runtime_version = get_version_or_na(cfg, 'HIP Runtime')
+            miopen_runtime_version = get_version_or_na(cfg, 'MIOpen')
             cuda_version_str = 'N/A'
             hip_compiled_version = torch.version.hip
     else:
@@ -319,6 +518,8 @@ def get_env_info():
         hip_compiled_version = hip_runtime_version = miopen_runtime_version = 'N/A'
 
     sys_version = sys.version.replace("\n", " ")
+
+    conda_packages = get_conda_packages(run_lambda)
 
     return SystemEnv(
         torch_version=version_str,
@@ -328,6 +529,7 @@ def get_env_info():
         is_cuda_available=cuda_available_str,
         cuda_compiled_version=cuda_version_str,
         cuda_runtime_version=get_running_cuda_version(run_lambda),
+        cuda_module_loading=get_cuda_module_loading_config(),
         nvidia_gpu_models=get_gpu_info(run_lambda),
         nvidia_driver_version=get_nvidia_driver_version(run_lambda),
         cudnn_version=get_cudnn_version(run_lambda),
@@ -336,7 +538,7 @@ def get_env_info():
         miopen_runtime_version=miopen_runtime_version,
         pip_version=pip_version,
         pip_packages=pip_list_output,
-        conda_packages=get_conda_packages(run_lambda),
+        conda_packages=conda_packages,
         os=get_os(run_lambda),
         libc_version=get_libc_version(),
         gcc_version=get_gcc_version(run_lambda),
@@ -344,6 +546,7 @@ def get_env_info():
         cmake_version=get_cmake_version(run_lambda),
         caching_allocator_config=get_cachingallocator_config(),
         is_xnnpack_available=is_xnnpack_available(),
+        cpu_info=get_cpu_info(run_lambda),
     )
 
 env_info_fmt = """
@@ -362,12 +565,16 @@ Python version: {python_version}
 Python platform: {python_platform}
 Is CUDA available: {is_cuda_available}
 CUDA runtime version: {cuda_runtime_version}
+CUDA_MODULE_LOADING set to: {cuda_module_loading}
 GPU models and configuration: {nvidia_gpu_models}
 Nvidia driver version: {nvidia_driver_version}
 cuDNN version: {cudnn_version}
 HIP runtime version: {hip_runtime_version}
 MIOpen runtime version: {miopen_runtime_version}
 Is XNNPACK available: {is_xnnpack_available}
+
+CPU:
+{cpu_info}
 
 Versions of relevant libraries:
 {pip_packages}
@@ -446,10 +653,22 @@ def pretty_str(envinfo):
     if mutable_dict['conda_packages']:
         mutable_dict['conda_packages'] = prepend(mutable_dict['conda_packages'],
                                                  '[conda] ')
+    mutable_dict['cpu_info'] = envinfo.cpu_info
     return env_info_fmt.format(**mutable_dict)
 
 
 def get_pretty_env_info():
+    """
+    Returns a pretty string of environment information.
+
+    This function retrieves environment information by calling the `get_env_info` function
+    and then formats the information into a human-readable string. The retrieved environment
+    information is listed in the document of `get_env_info`.
+    This function is used in `python collect_env.py` that should be executed when reporting a bug.
+
+    Returns:
+        str: A pretty string of the environment information.
+    """
     return pretty_str(get_env_info())
 
 

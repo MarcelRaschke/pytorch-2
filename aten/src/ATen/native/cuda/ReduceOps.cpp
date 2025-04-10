@@ -1,21 +1,36 @@
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
 #include <ATen/native/cuda/ReduceOps.h>
 
-#include <ATen/native/LinearAlgebra.h>
 #include <ATen/native/ReduceOps.h>
 #include <ATen/native/ReduceAllOps.h>
 #include <ATen/native/ReduceOpsUtils.h>
 #include <ATen/native/TensorCompare.h>
 
-#include <ATen/Functions.h>
+#include <ATen/Context.h>
+#include <ATen/TensorUtils.h>
+#include <ATen/WrapDimUtils.h>
+#include <ATen/core/NamedTensor.h>
 #include <ATen/TensorIterator.h>
 
-namespace at { namespace native {
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/full.h>
+#include <ATen/ops/imag.h>
+#include <ATen/ops/kthvalue_native.h>
+#include <ATen/ops/median_native.h>
+#include <ATen/ops/nanmedian_native.h>
+#include <ATen/ops/where.h>
+#endif
+
+namespace at::native {
 namespace {
 
 void norm_kernel_cuda(TensorIterator& iter, const Scalar& val) {
-  double p;
+  double p = 0;
   if (val.isIntegral(false)) {
-    p = val.to<int64_t>();
+    p = static_cast<double>(val.to<int64_t>());
   } else if (val.isFloatingPoint()) {
     p = val.to<double>();
   } else {
@@ -34,12 +49,6 @@ void norm_kernel_cuda(TensorIterator& iter, const Scalar& val) {
 
 }
 
-void linalg_vector_norm_kernel_cuda(TensorIterator& iter, Scalar ord) {
-  TORCH_CHECK(ord.isFloatingPoint(), "linalg.vector_norm expects ord to be float");
-  norm_kernel_cuda(iter, ord);
-}
-
-
 void min_kernel_impl(const Tensor& result, const Tensor& indice, const Tensor& self, int64_t dim, bool keepdim) {
   auto iter = meta::make_reduction(self, result, indice, dim, keepdim, self.scalar_type(), kLong);
   min_launch_kernel(iter);
@@ -54,7 +63,9 @@ void aminmax_kernel_impl(
     const Tensor& self, int64_t dim, bool keepdim, Tensor& min_result, Tensor& max_result) {
   at::TensorIterator iter = make_reduction("aminmax_cuda", min_result,
                                            max_result, self, dim, keepdim, self.scalar_type());
-  aminmax_launch_kernel(iter);
+  if (iter.numel() != 0) {
+    aminmax_launch_kernel(iter);
+  }
 }
 
 void min_all_kernel_impl(Tensor& result, const Tensor& input) {
@@ -79,14 +90,13 @@ void aminmax_allreduce_kernel_impl(const Tensor& input, Tensor& min_result, Tens
 
 }  // namespace (anonymous)
 
-REGISTER_CUDA_DISPATCH(min_stub, &min_kernel_impl);
-REGISTER_CUDA_DISPATCH(max_stub, &max_kernel_impl);
-REGISTER_CUDA_DISPATCH(min_all_stub, &min_all_kernel_impl);
-REGISTER_CUDA_DISPATCH(max_all_stub, &max_all_kernel_impl);
-REGISTER_CUDA_DISPATCH(aminmax_allreduce_stub, &aminmax_allreduce_kernel_impl);
-REGISTER_CUDA_DISPATCH(aminmax_stub, &aminmax_kernel_impl);
+REGISTER_CUDA_DISPATCH(min_stub, &min_kernel_impl)
+REGISTER_CUDA_DISPATCH(max_stub, &max_kernel_impl)
+REGISTER_CUDA_DISPATCH(min_all_stub, &min_all_kernel_impl)
+REGISTER_CUDA_DISPATCH(max_all_stub, &max_all_kernel_impl)
+REGISTER_CUDA_DISPATCH(aminmax_allreduce_stub, &aminmax_allreduce_kernel_impl)
+REGISTER_CUDA_DISPATCH(aminmax_stub, &aminmax_kernel_impl)
 
-REGISTER_CUDA_DISPATCH(norm_stub, &norm_kernel_cuda);
-REGISTER_CUDA_DISPATCH(linalg_vector_norm_stub, &linalg_vector_norm_kernel_cuda);
+REGISTER_CUDA_DISPATCH(norm_stub, &norm_kernel_cuda)
 
-}} // namespace at::native
+} // namespace at::native

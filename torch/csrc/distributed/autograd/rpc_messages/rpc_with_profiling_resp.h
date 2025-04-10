@@ -6,9 +6,7 @@
 #include <torch/csrc/distributed/rpc/rpc_command_base.h>
 #include <torch/csrc/distributed/rpc/types.h>
 
-namespace torch {
-namespace distributed {
-namespace autograd {
+namespace torch::distributed::autograd {
 class TORCH_API RpcWithProfilingResp : public rpc::RpcCommandBase {
  public:
   // For sending RPCs over the wire
@@ -18,7 +16,7 @@ class TORCH_API RpcWithProfilingResp : public rpc::RpcCommandBase {
       std::vector<torch::autograd::profiler::LegacyEvent> profiledEvents,
       rpc::ProfilingId profilingId);
 
-  // For receving RPCs. Used in from message when converting a message received
+  // For receiving RPCs. Used in from message when converting a message received
   // over the wire.
   RpcWithProfilingResp(
       rpc::MessageType messageType,
@@ -45,15 +43,16 @@ class TORCH_API RpcWithProfilingResp : public rpc::RpcCommandBase {
 
  private:
   // message type
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const rpc::MessageType messageType_;
   // wrapped message
   c10::intrusive_ptr<rpc::Message> wrappedMessage_;
   std::unique_ptr<RpcCommandBase> wrappedRpc_;
   rpc::MessageType wrappedMessageType_;
   std::vector<torch::Tensor> tensors_;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const std::vector<torch::autograd::profiler::LegacyEvent> profiledEvents_;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const rpc::ProfilingId profilingId_;
 };
-} // namespace autograd
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::autograd

@@ -10,8 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 std::string typeString(py::handle h);
 
@@ -28,12 +27,12 @@ std::shared_ptr<SugaredValue> toSugaredValue(
     const SourceRange& loc,
     bool is_constant = false);
 
-c10::optional<StrongFunctionPtr> as_function(const py::object& obj);
+std::optional<StrongFunctionPtr> as_function(const py::object& obj);
 
 struct VISIBILITY_HIDDEN PythonValue : public SugaredValue {
   PythonValue(
       py::object the_self,
-      c10::optional<py::object> rcb = c10::nullopt,
+      std::optional<py::object> rcb = std::nullopt,
       Value* module_self = nullptr)
       : self(std::move(the_self)),
         rcb(std::move(rcb)),
@@ -57,7 +56,7 @@ struct VISIBILITY_HIDDEN PythonValue : public SugaredValue {
   std::vector<std::shared_ptr<SugaredValue>> asTuple(
       const SourceRange& loc,
       GraphFunction& m,
-      const c10::optional<size_t>& size_hint = {}) override;
+      const std::optional<size_t>& size_hint = {}) override;
 
   std::shared_ptr<SugaredValue> attr(
       const SourceRange& loc,
@@ -65,11 +64,12 @@ struct VISIBILITY_HIDDEN PythonValue : public SugaredValue {
       const std::string& field) override;
 
   Value* asValue(const SourceRange& loc, GraphFunction& m) override {
-    throw ErrorReport(loc)
+    throw(
+        ErrorReport(loc)
         << kind() << " cannot be used as a value. "
         << "Perhaps it is a closed over global variable? If so, please "
         << "consider passing it in as an argument or use a local varible "
-        << "instead.";
+        << "instead.");
   }
 
  protected:
@@ -80,7 +80,7 @@ struct VISIBILITY_HIDDEN PythonValue : public SugaredValue {
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
   py::object self;
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
-  c10::optional<py::object> rcb;
+  std::optional<py::object> rcb;
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
   Value* moduleSelf_ = nullptr;
 };
@@ -96,7 +96,6 @@ struct VISIBILITY_HIDDEN PythonModuleValue : public PythonValue {
 
 // Used for desugaring uses of the torch.cuda module. All the CUDA APIs with
 // torch.cuda.* are resolved using CUDAPythonModuleValue.
-#if !defined(USE_ROCM)
 struct VISIBILITY_HIDDEN CUDAPythonModuleValue : public PythonValue {
   explicit CUDAPythonModuleValue(py::object mod)
       : PythonValue(std::move(mod)) {}
@@ -106,7 +105,6 @@ struct VISIBILITY_HIDDEN CUDAPythonModuleValue : public PythonValue {
       GraphFunction& m,
       const std::string& field) override;
 };
-#endif
 
 // Represents all the parameters of a module as a List[Tensor]
 struct VISIBILITY_HIDDEN ConstantParameterList : public SugaredValue {
@@ -129,7 +127,7 @@ struct VISIBILITY_HIDDEN ConstantParameterList : public SugaredValue {
 
 struct VISIBILITY_HIDDEN ModuleDictMethod : public SugaredValue {
   explicit ModuleDictMethod(SugaredValuePtr iterable, std::string name)
-      : iterable_(std::move(iterable)), name_(std::move(name)){};
+      : iterable_(std::move(iterable)), name_(std::move(name)) {}
 
   std::string kind() const override {
     return name_;
@@ -141,14 +139,15 @@ struct VISIBILITY_HIDDEN ModuleDictMethod : public SugaredValue {
       at::ArrayRef<NamedValue> args,
       at::ArrayRef<NamedValue> kwargs,
       size_t n_binders) override {
-    if (args.size() || kwargs.size()) {
-      throw ErrorReport(loc)
-          << name_ << " method does not accept any arguments";
+    if (!args.empty() || !kwargs.empty()) {
+      throw(
+          ErrorReport(loc) << name_ << " method does not accept any arguments");
     }
     return iterable_;
   }
 
   SugaredValuePtr iterable_;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const std::string name_;
 };
 
@@ -208,6 +207,14 @@ struct VISIBILITY_HIDDEN ModuleValue : public SugaredValue {
       const SourceRange& loc,
       GraphFunction& m);
 
+  std::shared_ptr<SugaredDict> getSugaredNamedParameterList(
+      const SourceRange& loc,
+      GraphFunction& m);
+
+  std::shared_ptr<SugaredDict> getSugaredNamedParameterDict(
+      const SourceRange& loc,
+      GraphFunction& m);
+
   void setAttr(
       const SourceRange& loc,
       GraphFunction& m,
@@ -236,7 +243,10 @@ struct VISIBILITY_HIDDEN ModuleValue : public SugaredValue {
 };
 
 bool isNamedTupleClass(const py::object& obj);
-TypePtr registerNamedTuple(const py::object& obj, const SourceRange& loc);
+TypePtr registerNamedTuple(
+    const py::object& obj,
+    const SourceRange& loc,
+    const ResolutionCallback& rcb);
 
 void recurseThroughNestedModules(
     const SourceRange& loc,
@@ -252,11 +262,10 @@ struct VISIBILITY_HIDDEN SugaredDict : public SugaredValue {
   explicit SugaredDict(
       std::shared_ptr<ModuleValue> self,
       std::shared_ptr<SugaredTupleValue> keys,
-      std::shared_ptr<SugaredTupleValue> modules) {
-    self_ = std::move(self);
-    keys_ = std::move(keys);
-    modules_ = std::move(modules);
-  }
+      std::shared_ptr<SugaredTupleValue> modules)
+      : self_(std::move(self)),
+        keys_(std::move(keys)),
+        modules_(std::move(modules)) {}
 
   std::string kind() const override {
     return "ModuleDict";
@@ -277,7 +286,7 @@ struct VISIBILITY_HIDDEN SugaredDict : public SugaredValue {
 
   SugaredValuePtr iter(const SourceRange& loc, GraphFunction& m) override {
     return keys_;
-  };
+  }
 
   std::shared_ptr<ModuleValue> self_;
   std::shared_ptr<SugaredTupleValue> keys_;
@@ -366,5 +375,4 @@ struct VISIBILITY_HIDDEN PythonSliceClass : public SugaredValue {
       size_t n_binders) override;
 };
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

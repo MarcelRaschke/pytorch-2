@@ -1,29 +1,16 @@
 #pragma once
 
-#include <torch/csrc/lazy/backend/lowering_context.h>
-#include <torch/csrc/lazy/ts_backend/ts_node_lowering.h>
-#include <torch/csrc/jit/runtime/graph_executor.h>
-#include <torch/csrc/api/include/torch/jit.h>
+#include <sstream>
 
-namespace torch {
-namespace lazy {
+#include <torch/csrc/api/include/torch/jit.h>
+#include <torch/csrc/jit/runtime/graph_executor.h>
+#include <torch/csrc/lazy/backend/lowering_context.h>
+#include <torch/csrc/lazy/core/ir.h>
+#include <torch/csrc/lazy/ts_backend/ts_node_lowering.h>
+
+namespace torch::lazy {
 
 using TSOpVector = std::vector<torch::jit::Value*>;
-
-class TORCH_API TSNodeLoweringInterface {
-  /**
-   * This interface is only needed for legacy ops, and can be removed once all
-   * ops implement TSNode->lower().
-   * */
- public:
-  TSNodeLoweringInterface() = default;
-
-  virtual ~TSNodeLoweringInterface() = default;
-
-  virtual bool Lower(const Node* node) = 0;
-
-  static std::unique_ptr<TSNodeLoweringInterface> Create(LoweringContext* loctx);
-};
 
 class TORCH_API TSComputation : public Computation {
  public:
@@ -34,7 +21,9 @@ class TORCH_API TSComputation : public Computation {
     }
   }
 
-  int parameters_size() const override { return parameter_names_.size(); }
+  int parameters_size() const override {
+    return static_cast<int>(parameter_names_.size());
+  }
 
   const std::vector<Shape>& parameter_shapes() const override {
     throw std::runtime_error(
@@ -52,9 +41,19 @@ class TORCH_API TSComputation : public Computation {
     return result_shape_;
   }
 
-  std::shared_ptr<torch::jit::Graph> graph() const { return graph_; }
+  const std::string to_string() const override {
+    std::ostringstream oss;
+    oss << *graph_;
+    return oss.str();
+  }
 
-  torch::jit::GraphExecutor& graph_executor() { return graph_executor_; }
+  std::shared_ptr<torch::jit::Graph> graph() const {
+    return graph_;
+  }
+
+  torch::jit::GraphExecutor& graph_executor() {
+    return graph_executor_;
+  }
 
  private:
   std::shared_ptr<torch::jit::Graph> graph_;
@@ -68,15 +67,11 @@ class TORCH_API TSLoweringContext : public LoweringContext {
  public:
   TSLoweringContext(const std::string& name, const BackendDevice device);
 
-  TSLoweringContext(const std::string& name, BackendDevice device,
-                    c10::ArrayRef<Node*> post_order,
-                    Util::EmissionMap emit_status);
-
-  // TODO(whc) replace these when real impl lands;
-  // I am just landing the interface in this diff, but MSVC won't allow undefined virtual funcs
-  Shape GetResultShape(size_t index) const override {
-    TORCH_INTERNAL_ASSERT(false, "not implemented");
-  }
+  TSLoweringContext(
+      const std::string& name,
+      BackendDevice device,
+      c10::ArrayRef<const Node*> post_order,
+      Util::EmissionMap emit_status);
 
   size_t AddResult(const Output& output) override {
     return AddResult(GetOutputOp(output));
@@ -89,6 +84,8 @@ class TORCH_API TSLoweringContext : public LoweringContext {
       const std::string& name) override {
     TORCH_INTERNAL_ASSERT(false, "not implemented");
   }
+
+  void Lower(const Node* node);
 
   ComputationPtr Build() override {
     for (torch::jit::Value* output : root_tuple_) {
@@ -105,8 +102,7 @@ class TORCH_API TSLoweringContext : public LoweringContext {
     if (it == emitted_outputs_.end()) {
       auto post_order = Util::ComputePostOrder(output.node, &emit_status_);
       for (auto node : post_order) {
-        bool ok = lowering_->Lower(node);
-        TORCH_CHECK(ok, "Failed to lower: ", node->ToString());
+        Lower(node);
       }
       // At this point the output better be present, otherwise there is an issue
       // with the lowering code.
@@ -127,27 +123,28 @@ class TORCH_API TSLoweringContext : public LoweringContext {
   // If a parameter associated with data has already been declared, it will be
   // returned. Otherwise a new one will be created, associated with the tensor
   // held in data.
-  torch::jit::Value* GetParameter(BackendDataPtr data);
+  torch::jit::Value* GetParameter(const BackendDataPtr& data);
 
-  std::shared_ptr<torch::jit::Graph> graph() const { return graph_; }
+  std::shared_ptr<torch::jit::Graph> graph() const {
+    return graph_;
+  }
 
  private:
   struct Parameter {
-    torch::jit::Value* param;
+    torch::jit::Value* param{nullptr};
     size_t index = 0;
   };
 
   size_t AddResult(torch::jit::Value* op) {
-    root_tuple_.push_back(std::move(op));
+    root_tuple_.push_back(op);
     return root_tuple_.size() - 1;
   }
 
   std::shared_ptr<torch::jit::Graph> graph_;
+  std::shared_ptr<torch::jit::GraphFunction> function_;
   std::unordered_map<BackendData::Handle, Parameter> parameters_map_;
   std::vector<torch::jit::Value*> root_tuple_;
   OutputMap<torch::jit::Value*> emitted_outputs_;
-  std::unique_ptr<TSNodeLoweringInterface> lowering_;
 };
 
-}  // namespace lazy
-}  // namespace torch
+} // namespace torch::lazy

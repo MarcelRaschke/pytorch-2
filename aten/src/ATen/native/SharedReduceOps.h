@@ -7,6 +7,7 @@
 #include <c10/macros/Macros.h>
 #include <ATen/detail/FunctionTraits.h>
 #include <ATen/NumericUtils.h>
+#include <ATen/OpMathType.h>
 #if defined(__CUDACC__)
 #include <ATen/cuda/DeviceUtils.cuh>
 #include <ATen/native/cuda/DeviceSqrt.cuh>
@@ -62,7 +63,7 @@ inline C10_DEVICE scalar_t min_propagate_nan(scalar_t a, scalar_t b) {
 #define compat_pow std::pow
 #endif
 
-namespace at { namespace native {
+namespace at::native {
 
 namespace detail {
 
@@ -74,12 +75,12 @@ template <typename T1, typename T2> using pair = std::pair<T1, T2>;
 
 } // namespace detail
 
-template <typename scalar_t, typename index_t, typename combine_t>
+template <typename scalar_t, typename index_t>
 struct WelfordData {
   scalar_t mean;
   scalar_t m2;
   index_t n;
-  combine_t nf;
+  scalar_t nf;
 
   C10_HOST_DEVICE WelfordData() : mean(0), m2(0), n(0), nf(0) {}
 
@@ -87,28 +88,30 @@ struct WelfordData {
       scalar_t mean,
       scalar_t m2,
       index_t n,
-      combine_t nf)
+      scalar_t nf)
       : mean(mean), m2(m2), n(n), nf(nf) {}
 };
 
 
-template <typename scalar_t, typename acc_scalar_t, typename index_t, typename combine_t, typename res_t>
+template <typename scalar_t, typename acc_scalar_t, typename index_t, typename res_t>
 struct WelfordOps {
-  index_t correction;
+  acc_scalar_t correction;
   bool take_sqrt;
  public:
-  using acc_t = WelfordData<acc_scalar_t, index_t, combine_t>;
+  using acc_t = WelfordData<acc_scalar_t, index_t>;
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, index_t /*idx*/) const {
+    // We accumulate n in index_t to avoid cumulative rounding error, but still
+    // need nf for use in combine where int32 may overflow.
+    index_t new_n = acc.n + 1;
+    acc_scalar_t new_nf = static_cast<acc_scalar_t>(new_n);
     acc_scalar_t delta = data - acc.mean;
-    // using acc.nf(combine_t) here, as acc.n(index_t) would still be converted
-    // accumulation in reduce is done through index_T
-    acc_scalar_t new_mean = acc.mean + delta / (acc.nf + 1);
+    acc_scalar_t new_mean = acc.mean + delta / new_nf;
     acc_scalar_t new_delta = data - new_mean;
     return {
       new_mean,
       acc.m2 + delta * new_delta,
-      acc.n + 1,
-      combine_t(acc.n + 1), // accumulate for combine_t uses index_t
+      new_n,
+      new_nf,
     };
   }
   inline C10_DEVICE acc_t combine(acc_t a, acc_t b) const {
@@ -119,7 +122,7 @@ struct WelfordOps {
       return a;
     }
     acc_scalar_t delta = b.mean - a.mean;
-    combine_t new_count = a.nf + b.nf;
+    acc_scalar_t new_count = a.nf + b.nf;
     acc_scalar_t nb_over_n = b.nf / new_count;
     return {
       a.mean + delta * nb_over_n,
@@ -132,7 +135,7 @@ struct WelfordOps {
   }
   inline C10_DEVICE res_t project(acc_t acc) const __ubsan_ignore_float_divide_by_zero__ {
     const auto mean = static_cast<scalar_t>(acc.mean);
-    const combine_t divisor = acc.nf > correction ? acc.nf - correction : 0;
+    const auto divisor = acc.nf > correction ? acc.nf - correction : 0;
     const auto var = acc.m2 / divisor;
     res_t results(take_sqrt ? device_sqrt(var) : var, mean);
     return results;
@@ -152,23 +155,23 @@ struct WelfordOps {
     };
   }
 #endif
-  C10_HOST_DEVICE WelfordOps(index_t correction, bool take_sqrt)
+  C10_HOST_DEVICE WelfordOps(acc_scalar_t correction, bool take_sqrt)
       : correction(correction), take_sqrt(take_sqrt) {}
 };
 
-template <typename acc_t, typename factor_t>
+template <typename scalar_t, typename acc_t=scalar_t, typename factor_t=acc_t, typename out_t = acc_t>
 struct MeanOps {
   factor_t factor;
 
-  inline C10_DEVICE acc_t reduce(acc_t a, acc_t b, int64_t /*idx*/) const {
-    return combine(a, b);
+  inline C10_DEVICE acc_t reduce(acc_t a, scalar_t b, int64_t /*idx*/) const {
+    return combine(a, static_cast<acc_t>(b));
   }
 
   inline C10_DEVICE acc_t combine(acc_t a, acc_t b) const {
     return a + b;
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return a * factor;
   }
 
@@ -190,18 +193,18 @@ struct MeanOps {
 // a set of numbers.
 // `scalar_t` is the type of the input and `acc_t` is the type of the accumulated
 // value. These types differ for complex number input support.
-template <typename scalar_t, typename acc_t=scalar_t>
+template <typename scalar_t, typename acc_t = scalar_t, typename out_t = acc_t>
 struct AbsMinOps {
 
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, int64_t /*idx*/) const {
-    return MIN(acc, static_cast<acc_t>(std::abs(data)));
+    return MIN(acc, static_cast<acc_t>(std::abs(at::opmath_type<scalar_t>(data))));
   }
 
   inline C10_DEVICE acc_t combine(acc_t a, acc_t b) const {
     return MIN(a, b);
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return a;
   }
 
@@ -220,18 +223,17 @@ struct AbsMinOps {
 // a set of numbers.
 // `scalar_t` is the type of the input and `acc_t` is the type of the accumulated
 // value. These types differ for complex number input support.
-template <typename scalar_t, typename acc_t=scalar_t>
+template <typename scalar_t, typename acc_t = scalar_t, typename out_t = acc_t>
 struct AbsMaxOps {
-
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, int64_t /*idx*/) const {
-    return MAX(acc, static_cast<acc_t>(std::abs(data)));
+    return MAX(acc, static_cast<acc_t>(std::abs(at::opmath_type<scalar_t>(data))));
   }
 
   inline C10_DEVICE acc_t combine(acc_t a, acc_t b) const {
     return MAX(a, b);
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return a;
   }
 
@@ -250,19 +252,19 @@ struct AbsMaxOps {
 // of a set of numbers.
 // `scalar_t` is the type of the input and `acc_t` is the type of the accumulated
 // value. These types differ for complex number input support.
-template <typename scalar_t, typename acc_t=scalar_t>
+template <typename scalar_t, typename acc_t = scalar_t, typename out_t = acc_t>
 struct NormOps {
   acc_t norm_;
 
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, int64_t /*idx*/) const {
-    return acc + compat_pow(static_cast<acc_t>(std::abs(data)), norm_);
+    return acc + compat_pow(static_cast<acc_t>(std::abs(at::opmath_type<scalar_t>(data))), norm_);
   }
 
   inline C10_DEVICE acc_t combine(acc_t a, acc_t b) const {
     return a + b;
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return compat_pow(a, static_cast<acc_t>(1.0) / norm_);
   }
 
@@ -284,7 +286,7 @@ struct NormOps {
 // absolute value of a set of numbers.
 // `scalar_t` is the type of the input and `acc_t` is the type of the accumulated
 // value. These types differ for complex number input support.
-template <typename scalar_t, typename acc_t=scalar_t>
+template <typename scalar_t, typename acc_t = scalar_t, typename out_t = acc_t>
 struct NormZeroOps {
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, int64_t /*idx*/) const {
     return acc + (data == static_cast<scalar_t>(0) ? static_cast<acc_t>(0) : static_cast<acc_t>(1));
@@ -294,7 +296,7 @@ struct NormZeroOps {
     return a + b;
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return a;
   }
 
@@ -314,17 +316,17 @@ struct NormZeroOps {
 // absolute value of a set of numbers.
 // `scalar_t` is the type of the input and `acc_t` is the type of the accumulated
 // value. These types differ for complex number input support.
-template <typename scalar_t, typename acc_t=scalar_t>
+template <typename scalar_t, typename acc_t = scalar_t, typename out_t = acc_t>
 struct NormOneOps {
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, int64_t /*idx*/) const {
-    return acc + static_cast<acc_t>(std::abs(data));
+    return acc + static_cast<acc_t>(std::abs(at::opmath_type<scalar_t>(data)));
   }
 
   inline C10_DEVICE acc_t combine(acc_t a, acc_t b) const {
     return a + b;
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return a;
   }
 
@@ -355,14 +357,14 @@ inline C10_DEVICE acc_t abs_if_complex(std::complex<scalar_t> data, AbsSwitch<ac
 
 template<typename scalar_t, typename acc_t>
 inline C10_DEVICE acc_t abs_if_complex(c10::complex<scalar_t> data, AbsSwitch<acc_t>) {
-  return static_cast<acc_t>(std::abs(data));
+  return static_cast<acc_t>(std::abs(at::opmath_type<c10::complex<scalar_t>>(data)));
 }
 
 // This accumulator template is used to calculate the order two norm of the
 // absolute value of a set of numbers.
 // `scalar_t` is the type of the input and `acc_t` is the type of the accumulated
 // value. These types differ for complex number input support.
-template <typename scalar_t, typename acc_t=scalar_t>
+template <typename scalar_t, typename acc_t = scalar_t, typename out_t = acc_t>
 struct NormTwoOps {
   inline C10_DEVICE acc_t reduce(acc_t acc, scalar_t data, int64_t /*idx*/) const {
     acc_t data_ = abs_if_complex(data, AbsSwitch<acc_t>());
@@ -373,7 +375,7 @@ struct NormTwoOps {
     return a + b;
   }
 
-  inline C10_DEVICE acc_t project(acc_t a) const {
+  inline C10_DEVICE out_t project(acc_t a) const {
     return device_sqrt(a);
   }
 
@@ -537,7 +539,7 @@ struct MinMaxOps {
 #endif
 };
 
-}} // namespace at::native
+} // namespace at::native
 
 #undef MAX
 #undef MIN

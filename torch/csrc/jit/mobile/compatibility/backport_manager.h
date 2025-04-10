@@ -8,17 +8,11 @@ namespace c10 {
 struct IValue;
 }
 
-namespace caffe2 {
-namespace serialize {
-class IStreamAdapter;
-class ReadAdapterInterface;
+namespace caffe2::serialize {
 class PyTorchStreamWriter;
-class PyTorchStreamReader;
-} // namespace serialize
-} // namespace caffe2
+} // namespace caffe2::serialize
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 /*
 BackportManager manages a list of backport from n to n-1 function, and provides
@@ -34,7 +28,7 @@ class BackportManager final {
   bytecodeBackportFunctions() const;
 
   bool backport(
-      std::shared_ptr<caffe2::serialize::IStreamAdapter> istream_adapter,
+      std::istream& oss,
       caffe2::serialize::PyTorchStreamWriter& final_writer,
       int64_t from_version,
       int64_t to_version) const;
@@ -51,5 +45,4 @@ class BackportManager final {
           backport_function);
 };
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

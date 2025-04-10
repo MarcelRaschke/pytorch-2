@@ -4,7 +4,7 @@
 #include <vector>
 
 #include <ATen/div_rtn.h>
-#include <ATen/ATen.h>
+#include <ATen/core/Tensor.h>
 #include <c10/util/irange.h>
 
 #define TORCH_CHECK_DIM_SIZE(T, DIM, DIM_SIZE, SIZE) \
@@ -19,9 +19,7 @@
       " but got input to be of shape ",              \
       T.sizes())
 
-namespace at {
-namespace native {
-namespace internal {
+namespace at::native::internal {
 namespace {
 inline bool all_positive(IntArrayRef& arr) {
   return std::all_of(
@@ -228,6 +226,4 @@ void slow_conv_dilated_shape_check(
   }
 }
 
-} // namespace internal
-} // namespace native
-} // namespace at
+} // namespace at::native::internal

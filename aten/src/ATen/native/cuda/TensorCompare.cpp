@@ -1,7 +1,8 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <ATen/native/TensorCompare.h>
 
-namespace at { namespace native {
+namespace at::native {
 
 namespace {
 
@@ -17,6 +18,6 @@ void isin_default_kernel_gpu(
 
 } // anonymous namespace
 
-REGISTER_CUDA_DISPATCH(isin_default_stub, &isin_default_kernel_gpu);
+REGISTER_CUDA_DISPATCH(isin_default_stub, &isin_default_kernel_gpu)
 
-}} // namespace at::native
+} // namespace at::native

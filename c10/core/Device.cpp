@@ -1,14 +1,11 @@
 #include <c10/core/Device.h>
-#include <c10/macros/Macros.h>
 #include <c10/util/Exception.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <exception>
-#include <ostream>
 #include <string>
-#include <tuple>
 #include <vector>
 
 namespace c10 {
@@ -20,6 +17,7 @@ DeviceType parse_type(const std::string& device_string) {
       types = {{
           {"cpu", DeviceType::CPU},
           {"cuda", DeviceType::CUDA},
+          {"ipu", DeviceType::IPU},
           {"xpu", DeviceType::XPU},
           {"mkldnn", DeviceType::MKLDNN},
           {"opengl", DeviceType::OPENGL},
@@ -28,14 +26,21 @@ DeviceType parse_type(const std::string& device_string) {
           {"hip", DeviceType::HIP},
           {"ve", DeviceType::VE},
           {"fpga", DeviceType::FPGA},
-          {"ort", DeviceType::ORT},
+          {"maia", DeviceType::MAIA},
           {"xla", DeviceType::XLA},
           {"lazy", DeviceType::Lazy},
           {"vulkan", DeviceType::Vulkan},
-          {"mlc", DeviceType::MLC},
+          {"mps", DeviceType::MPS},
           {"meta", DeviceType::Meta},
           {"hpu", DeviceType::HPU},
+          {"mtia", DeviceType::MTIA},
+          {"privateuseone", DeviceType::PrivateUse1},
       }};
+  if (device_string == "mkldnn") {
+    TORCH_WARN_ONCE(
+        "'mkldnn' is no longer used as device type. So torch.device('mkldnn') will be "
+        "deprecated and removed in the future. Please use other valid device types instead.");
+  }
   auto device = std::find_if(
       types.begin(),
       types.end(),
@@ -45,9 +50,20 @@ DeviceType parse_type(const std::string& device_string) {
   if (device != types.end()) {
     return device->second;
   }
+  if (device_string == get_privateuse1_backend()) {
+    return DeviceType::PrivateUse1;
+  }
+  std::vector<const char*> device_names;
+  for (const auto& it : types) {
+    if (it.first) {
+      device_names.push_back(it.first);
+    }
+  }
   TORCH_CHECK(
       false,
-      "Expected one of cpu, cuda, xpu, mkldnn, opengl, opencl, ideep, hip, ve, ort, mlc, xla, lazy, vulkan, meta, hpu device type at start of device string: ",
+      "Expected one of ",
+      c10::Join(", ", device_names),
+      " device type at start of device string: ",
       device_string);
 }
 enum DeviceStringParsingState { START, INDEX_START, INDEX_REST, ERROR };
@@ -116,7 +132,7 @@ Device::Device(const std::string& device_string) : Device(Type::CPU) {
 
   try {
     if (!device_index_str.empty()) {
-      index_ = c10::stoi(device_index_str);
+      index_ = static_cast<c10::DeviceIndex>(std::stoi(device_index_str));
     }
   } catch (const std::exception&) {
     TORCH_CHECK(
@@ -135,7 +151,7 @@ std::string Device::str() const {
   std::string str = DeviceTypeName(type(), /* lower case */ true);
   if (has_index()) {
     str.push_back(':');
-    str.append(to_string(index()));
+    str.append(std::to_string(index()));
   }
   return str;
 }

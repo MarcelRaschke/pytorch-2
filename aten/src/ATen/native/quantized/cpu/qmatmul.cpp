@@ -3,11 +3,11 @@
 
 #ifdef USE_RUY_QMATMUL
 #include <ATen/Parallel.h>
+#include <ATen/native/quantized/cpu/RuyUtils.h>
 #include <ruy/ruy.h>
 #endif
 
-namespace at {
-namespace native {
+namespace at::native {
 
 namespace {
 
@@ -20,30 +20,13 @@ inline void check_inputs(const Tensor& qa, const Tensor& qb) {
       "MatMul operands should have same data type.");
   TORCH_CHECK(
       qa.qscheme() == kPerTensorAffine || qa.qscheme() == kPerTensorSymmetric,
-      "Only per-tensor quantization is suported in Matmul.");
+      "Only per-tensor quantization is supported in Matmul.");
   TORCH_CHECK(
       qa.qscheme() == qb.qscheme(),
       "Both inputs to Matmul must have the same quantization scheme.");
 }
 
 #ifdef USE_RUY_QMATMUL
-
-// Adopted from Ruy:
-// https://github.com/google/ruy/blob/2d950b3bfa7ebfbe7a97ecb44b1cc4da5ac1d6f0/ruy/test.h#L1602
-void QuantizeMultiplier(double scale,
-                        int* multiplier_fixedpoint,
-                        int* multiplier_exponent) {
-  TORCH_CHECK(scale > 0, "Quantization scale (", scale, ") must be positive.");
-  const double q = std::frexp(scale, multiplier_exponent);
-  auto q_fixed = static_cast<std::int64_t>(std::round(q * (1ll << 31)));
-  TORCH_CHECK(q_fixed <= (1ll << 31));
-  if (q_fixed == (1ll << 31)) {
-    q_fixed /= 2;
-    ++*multiplier_exponent;
-  }
-  TORCH_CHECK(q_fixed <= std::numeric_limits<std::int32_t>::max());
-  *multiplier_fixedpoint = static_cast<std::int32_t>(q_fixed);
-}
 
 Tensor qmatmul(
     const Tensor& qa,
@@ -61,7 +44,7 @@ Tensor qmatmul(
       " and ", b_num_dims, " provided)");
   TORCH_CHECK(
       num_dims >= 2,
-      "Quantized Matmul currently only suports operands which are at least 2-dimensional. (",
+      "Quantized Matmul currently only supports operands which are at least 2-dimensional. (",
       num_dims, " provided)");
 
   const int64_t m = qa.size(num_dims - 2);
@@ -100,7 +83,7 @@ Tensor qmatmul(
           .memory_format(qa.suggest_memory_format()),
       output_scale,
       output_zero_point,
-      c10::nullopt);
+      std::nullopt);
 
   const Tensor& qa_contig = qa.contiguous();
   const Tensor& qb_contig = qb.contiguous();
@@ -120,7 +103,6 @@ Tensor qmatmul(
     const size_t out_stride = m * n;
 
     auto matmuls = [&](int64_t begin, int64_t end) {
-      ruy::Context context;
 
       ruy::Matrix<underlying_t> qa_matrix;
       ruy::MakeSimpleLayout(
@@ -146,9 +128,9 @@ Tensor qmatmul(
 
       int multiplier_fixedpoint;
       int multiplier_exponent;
-      QuantizeMultiplier(requantization_scale_inv,
-                         &multiplier_fixedpoint,
-                         &multiplier_exponent);
+      ruy_utils::quantize_multiplier(requantization_scale_inv,
+                                     &multiplier_fixedpoint,
+                                     &multiplier_exponent);
       mul_params.set_multiplier_fixedpoint(multiplier_fixedpoint);
       mul_params.set_multiplier_exponent(multiplier_exponent);
 
@@ -160,7 +142,11 @@ Tensor qmatmul(
         qa_matrix.set_data(qa_subtensor);
         qb_matrix.set_data(qb_subtensor);
         out_matrix.set_data(out_subtensor);
-        ruy::Mul(qa_matrix, qb_matrix, mul_params, &context, &out_matrix);
+        ruy::Mul(qa_matrix,
+                 qb_matrix,
+                 mul_params,
+                 ruy_utils::get_ruy_context(),
+                 &out_matrix);
 
         qa_subtensor += qa_stride;
         qb_subtensor += qb_stride;
@@ -197,5 +183,4 @@ TORCH_LIBRARY_IMPL(quantized, QuantizedCPU, m) {
 
 } // namespace
 
-} // namespace native
-} // namespace at
+} // namespace at::native

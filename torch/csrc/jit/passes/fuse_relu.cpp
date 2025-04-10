@@ -4,8 +4,7 @@
 #include <torch/csrc/jit/ir/subgraph_matcher.h>
 #include <torch/csrc/jit/passes/subgraph_rewrite.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 void fuseAddReluImpl(std::shared_ptr<Graph>& graph) {
@@ -54,8 +53,8 @@ void fuseAddReluImpl(std::shared_ptr<Graph>& graph) {
 
   rewriter.runOnGraph(graph);
   // NB: Patterns that are left out are add_ + relu and add_out + relu
-  // This is because inplace mutation of the testor done by add_ will be lost if
-  // inplace mutatation of the same tensor actually does add+relu
+  // This is because inplace mutation of the tensor done by add_ will be lost if
+  // inplace mutation of the same tensor actually does add+relu
 }
 } // namespace
 
@@ -67,5 +66,4 @@ void FuseAddRelu(script::Module& module) {
 void FuseAddRelu(std::shared_ptr<Graph>& graph) {
   fuseAddReluImpl(graph);
 }
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

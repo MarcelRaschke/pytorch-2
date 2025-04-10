@@ -2,8 +2,7 @@
 
 #include <c10/util/Exception.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -125,9 +124,11 @@ const std::unordered_map<Symbol, Symbol>& getOperatorAliasMap() {
       {aten::multiply, aten::mul},
       {aten::multiply_, aten::mul_},
       {aten::linalg_matmul, aten::matmul},
+      {aten::inverse, aten::linalg_inv},
       {aten::true_divide, aten::div},
       {aten::true_divide_, aten::div_},
       {aten::concat, aten::cat},
+      {aten::concatenate, aten::cat},
       {aten::row_stack, aten::vstack},
       {aten::swapdims, aten::transpose},
       {aten::swapdims_, aten::transpose_},
@@ -165,5 +166,4 @@ void NormalizeOps(const std::shared_ptr<Graph>& graph) {
   NormalizeOps(graph->block());
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

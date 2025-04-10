@@ -1,12 +1,11 @@
 #pragma once
 
 #include <torch/arg.h>
-#include <torch/enum.h>
 #include <torch/csrc/Export.h>
+#include <torch/enum.h>
 #include <torch/types.h>
 
-namespace torch {
-namespace nn {
+namespace torch::nn {
 
 /// Options for the `ELU` module.
 ///
@@ -156,7 +155,8 @@ using HardshrinkFuncOptions = HardshrinkOptions;
 ///
 /// Example:
 /// ```
-/// Hardtanh model(HardtanhOptions().min_val(-42.42).max_val(0.42).inplace(true));
+/// Hardtanh
+/// model(HardtanhOptions().min_val(-42.42).max_val(0.42).inplace(true));
 /// ```
 struct TORCH_API HardtanhOptions {
   /// minimum value of the linear region range. Default: -1
@@ -178,7 +178,8 @@ namespace functional {
 /// Example:
 /// ```
 /// namespace F = torch::nn::functional;
-/// F::hardtanh(x, F::HardtanhFuncOptions().min_val(-1.0).max_val(1.0).inplace(true));
+/// F::hardtanh(x,
+/// F::HardtanhFuncOptions().min_val(-1.0).max_val(1.0).inplace(true));
 /// ```
 using HardtanhFuncOptions = HardtanhOptions;
 } // namespace functional
@@ -208,10 +209,11 @@ namespace functional {
 /// Example:
 /// ```
 /// namespace F = torch::nn::functional;
-/// F::leaky_relu(x, F::LeakyReLUFuncOptions().negative_slope(0.42).inplace(true));
+/// F::leaky_relu(x,
+/// F::LeakyReLUFuncOptions().negative_slope(0.42).inplace(true));
 /// ```
 using LeakyReLUFuncOptions = LeakyReLUOptions;
-}
+} // namespace functional
 
 // ============================================================================
 
@@ -247,8 +249,9 @@ struct TORCH_API SoftmaxFuncOptions {
 
   /// the desired data type of returned tensor.
   /// If specified, the input tensor is casted to `dtype` before the operation
-  /// is performed. This is useful for preventing data type overflows. Default: None.
-  TORCH_ARG(c10::optional<torch::Dtype>, dtype) = c10::nullopt;
+  /// is performed. This is useful for preventing data type overflows. Default:
+  /// None.
+  TORCH_ARG(std::optional<torch::Dtype>, dtype) = std::nullopt;
 };
 
 } // namespace functional
@@ -287,8 +290,9 @@ struct TORCH_API SoftminFuncOptions {
 
   /// the desired data type of returned tensor.
   /// If specified, the input tensor is casted to `dtype` before the operation
-  /// is performed. This is useful for preventing data type overflows. Default: None.
-  TORCH_ARG(c10::optional<torch::Dtype>, dtype) = c10::nullopt;
+  /// is performed. This is useful for preventing data type overflows. Default:
+  /// None.
+  TORCH_ARG(std::optional<torch::Dtype>, dtype) = std::nullopt;
 };
 
 } // namespace functional
@@ -327,8 +331,9 @@ struct TORCH_API LogSoftmaxFuncOptions {
 
   /// the desired data type of returned tensor.
   /// If specified, the input tensor is casted to `dtype` before the operation
-  /// is performed. This is useful for preventing data type overflows. Default: None.
-  TORCH_ARG(c10::optional<torch::Dtype>, dtype) = c10::nullopt;
+  /// is performed. This is useful for preventing data type overflows. Default:
+  /// None.
+  TORCH_ARG(std::optional<torch::Dtype>, dtype) = std::nullopt;
 };
 
 } // namespace functional
@@ -343,7 +348,8 @@ struct TORCH_API LogSoftmaxFuncOptions {
 /// ```
 struct TORCH_API PReLUOptions {
   /// number of `a` to learn. Although it takes an int as input, there is only
-  /// two values are legitimate: 1, or the number of channels at input. Default: 1
+  /// two values are legitimate: 1, or the number of channels at input. Default:
+  /// 1
   TORCH_ARG(int64_t, num_parameters) = 1;
 
   /// the initial value of `a`. Default: 0.25
@@ -552,7 +558,7 @@ using SoftshrinkFuncOptions = SoftshrinkOptions;
 /// ```
 struct TORCH_API ThresholdOptions {
   ThresholdOptions(double threshold, double value)
-   : threshold_(threshold), value_(value) {}
+      : threshold_(threshold), value_(value) {}
 
   /// The value to threshold at
   TORCH_ARG(double, threshold);
@@ -594,7 +600,8 @@ struct TORCH_API GumbelSoftmaxFuncOptions {
   TORCH_ARG(double, tau) = 1.0;
 
   /// returned samples will be discretized as one-hot vectors,
-  /// but will be differentiated as if it is the soft sample in autograd. Default: False
+  /// but will be differentiated as if it is the soft sample in autograd.
+  /// Default: False
   TORCH_ARG(bool, hard) = false;
 
   /// dimension along which softmax will be computed. Default: -1
@@ -632,10 +639,10 @@ struct TORCH_API MultiheadAttentionOptions {
   /// add a new batch of zeros to the key and value sequences at dim=1.
   TORCH_ARG(bool, add_zero_attn) = false;
 
-  /// total number of features in key. Default: c10::nullopt.
+  /// total number of features in key. Default: std::nullopt.
   TORCH_ARG(int64_t, kdim);
 
-  /// total number of features in key. Default: c10::nullopt.
+  /// total number of features in key. Default: std::nullopt.
   TORCH_ARG(int64_t, vdim);
 };
 
@@ -645,14 +652,17 @@ namespace functional {
 
 /// Options for `torch::nn::functional::multi_head_attention_forward`
 struct TORCH_API MultiheadAttentionForwardFuncOptions {
-
   MultiheadAttentionForwardFuncOptions(
-    int64_t embed_dim_to_check, int64_t num_heads,
-    Tensor in_proj_weight, Tensor in_proj_bias,
-    Tensor bias_k, Tensor bias_v,
-    bool add_zero_attn, double dropout_p,
-    Tensor out_proj_weight, Tensor out_proj_bias
-  );
+      int64_t embed_dim_to_check,
+      int64_t num_heads,
+      Tensor in_proj_weight,
+      Tensor in_proj_bias,
+      Tensor bias_k,
+      Tensor bias_v,
+      bool add_zero_attn,
+      double dropout_p,
+      Tensor out_proj_weight,
+      Tensor out_proj_bias);
 
   TORCH_ARG(int64_t, embed_dim_to_check);
 
@@ -699,5 +709,4 @@ struct TORCH_API MultiheadAttentionForwardFuncOptions {
 
 } // namespace functional
 
-} // namespace nn
-} // namespace torch
+} // namespace torch::nn

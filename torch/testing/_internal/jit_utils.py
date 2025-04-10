@@ -1,3 +1,5 @@
+# mypy: ignore-errors
+
 # Torch
 from torch.autograd import Variable
 from torch.autograd.function import _nested_map
@@ -37,7 +39,7 @@ import sys
 import tempfile
 import textwrap
 from importlib.abc import Loader
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Union
 
 RUN_CUDA = torch.cuda.is_available()
 RUN_CUDA_MULTI_GPU = RUN_CUDA and torch.cuda.device_count() > 1
@@ -66,10 +68,10 @@ def get_execution_plan(graph_executor_state):
     num_plans = len(execution_plans)
     if num_plans != 1:
         raise RuntimeError('This test assumes this GraphExecutor should '
-                           'only have one execution plan, got: {}'.format(num_plans))
+                           f'only have one execution plan, got: {num_plans}')
     return execution_plans[0]
 
-class _AssertRaisesRegexWithHighlightContext(object):
+class _AssertRaisesRegexWithHighlightContext:
     """
     A context manager that is useful for checking that error messages highlight
     the correct part of the source code.
@@ -149,7 +151,7 @@ class JitTestCase(JitCommonTestCase):
     def tearDown(self):
         super().tearDown()
         # needs to be cleared because python might be unloaded before
-        # the callback gets destucted
+        # the callback gets destructed
         self.clearHooks()
         clear_class_registry()
 
@@ -174,14 +176,14 @@ class JitTestCase(JitCommonTestCase):
         allowed_nodes = {'prim::Constant', FUSION_GROUP, 'prim::BailoutTemplate',
                          'prim::TupleConstruct', 'prim::If', 'prim::TypeCheck', 'prim::RequiresGradCheck'} | set(except_for)
 
-        fusion_groups : Dict[torch._C.Block, List[torch._C.Node]] = defaultdict(list)
+        fusion_groups : dict[torch._C.Block, list[torch._C.Node]] = defaultdict(list)
         get_nodes_and_parents_recursively(graph, FUSION_GROUP, fusion_groups)
-        self.assertTrue(len(fusion_groups) == 1, 'got {}'.format(graph))
-        (graph, fusion_nodes) = list(fusion_groups.items())[0]
+        self.assertTrue(len(fusion_groups) == 1, f'got {graph}')
+        (graph, fusion_nodes) = next(iter(fusion_groups.items()))
         # the block contains one FUSION_GROUP and the rest of nodes are `allowed_nodes`
-        self.assertTrue(len(fusion_nodes) == 1, 'got {}'.format(graph))
+        self.assertTrue(len(fusion_nodes) == 1, f'got {graph}')
         self.assertTrue(all(node.kind() in allowed_nodes for node in graph.nodes()),
-                        'got {}'.format(graph))
+                        f'got {graph}')
 
     def _isHookExceptionOk(self, e):
         se = str(e)
@@ -228,7 +230,7 @@ class JitTestCase(JitCommonTestCase):
                 # and it's easier to just work with a fresh copy each time.
                 buffer_copy = buffer.getvalue()
 
-                code_files, debug_files = extract_files(buffer)
+                code_files, _debug_files = extract_files(buffer)
 
             except RuntimeError as e:
                 if not self._isHookExceptionOk(e):
@@ -245,7 +247,7 @@ class JitTestCase(JitCommonTestCase):
             torch.jit.save(imported, saved_module_buffer_2)
 
             saved_module_buffer_2.seek(0)
-            code_files_2, debug_files_2 = extract_files(saved_module_buffer_2)
+            code_files_2, _debug_files_2 = extract_files(saved_module_buffer_2)
 
             for a, b in zip(code_files, code_files_2):
                 self.assertMultiLineEqual(a, b)
@@ -294,7 +296,7 @@ class JitTestCase(JitCommonTestCase):
 
         if consider_subgraphs:
             strgraph = str(graph)
-            count = strgraph.count(kind) - strgraph.count('with {}'.format(kind))
+            count = strgraph.count(kind) - strgraph.count(f'with {kind}')
             self.assertTrue(count > 0)
             return
 
@@ -316,12 +318,11 @@ class JitTestCase(JitCommonTestCase):
                 return
             subgraph = 'including' if consider_subgraphs else 'excluding'
             raise AssertionError(
-                '{}\nError: graph contains {} {} nodes ({} subgraphs) but expected {}'.format(
-                    graph, actual, kind, subgraph, expected))
+                f'{graph}\nError: graph contains {actual} {kind} nodes ({subgraph} subgraphs) but expected {expected}')
 
         if consider_subgraphs:
             strgraph = str(graph)
-            count = strgraph.count(kind) - strgraph.count('with {}'.format(kind))
+            count = strgraph.count(kind) - strgraph.count(f'with {kind}')
             perform_assert(graph, kind, count, num_kind_nodes,
                            consider_subgraphs)
             return
@@ -384,7 +385,7 @@ class JitTestCase(JitCommonTestCase):
             if not frame:
                 raise RuntimeError("failed to get frame")
             i += 1
-        defined_vars: Dict[str, Any] = {}
+        defined_vars: dict[str, Any] = {}
         defined_vars.update(frame.f_locals)
         defined_vars.update(frame.f_globals)
         return defined_vars
@@ -406,7 +407,7 @@ class JitTestCase(JitCommonTestCase):
             with self.assertRaisesRegex(exception, regex):
                 if isinstance(script, str):
                     frame = self.get_frame_vars(frames_up)
-                    the_locals: Dict[str, Any] = {}
+                    the_locals: dict[str, Any] = {}
                     execWrapper(script, glob=frame, loc=the_locals)
                     frame.update(the_locals)
 
@@ -470,7 +471,7 @@ class JitTestCase(JitCommonTestCase):
                     # outputs
 
                     frame = self.get_frame_vars(frames_up)
-                    the_locals: Dict[str, Any] = {}
+                    the_locals: dict[str, Any] = {}
                     execWrapper(script, glob=frame, loc=the_locals)
                     frame.update(the_locals)
 
@@ -502,9 +503,9 @@ class JitTestCase(JitCommonTestCase):
                 if capture_output:
                     with self.capture_stdout() as script_stdout:
                         script_outputs = scripted_fn(*recording_inputs)
-                    with self.capture_stdout() as opt_script_stdout:
+                    with self.capture_stdout():
                         opt_script_outputs = scripted_fn(*recording_inputs)
-                    with self.capture_stdout() as _python_stdout:
+                    with self.capture_stdout():
                         python_outputs = python_fn(*inputs)
                     if not IS_WINDOWS:
                         self.assertExpected(script_stdout[0], subname='stdout')
@@ -526,7 +527,7 @@ class JitTestCase(JitCommonTestCase):
     def checkTrace(self, func, reference_tensors, input_tensors=None,
                    drop=None, allow_unused=False, verbose=False,
                    inputs_require_grads=True, check_tolerance=1e-5, export_import=True,
-                   _force_outplace=False):
+                   _force_outplace=False, grad_atol=None, grad_rtol=None):
 
         # TODO: check gradients for parameters, not just inputs
         def allSum(vs):
@@ -587,11 +588,7 @@ class JitTestCase(JitCommonTestCase):
                                            allow_unused=allow_unused)
         self.assertEqual(outputs, outputs_ge)
         if inputs_require_grads:
-            self.assertEqual(grads, grads_ge)
-
-        self.assertEqual(outputs, outputs_ge)
-        if inputs_require_grads:
-            self.assertEqual(grads, grads_ge)
+            self.assertEqual(grads, grads_ge, atol=grad_atol, rtol=grad_rtol)
 
         # test the grad grad case
         outputs = func(*recording_inputs)
@@ -619,7 +616,7 @@ class JitTestCase(JitCommonTestCase):
 
         self.assertEqual(outputs, outputs_ge)
         if inputs_require_grads:
-            self.assertEqual(grads, grads_ge)
+            self.assertEqual(grads, grads_ge, atol=grad_atol, rtol=grad_rtol)
             for g2, g2_ge in zip(grads2, grads2_ge):
                 if g2 is None and g2_ge is None:
                     continue
@@ -644,6 +641,14 @@ class JitTestCase(JitCommonTestCase):
         self.assertExportImportModule(sm, args)
 
         return sm
+
+class NoTracerWarnContextManager:
+    def __enter__(self):
+        self.prev = torch._C._jit_get_tracer_state_warn()
+        torch._C._jit_set_tracer_state_warn(False)
+
+    def __exit__(self, *args):
+        torch._C._jit_set_tracer_state_warn(self.prev)
 
 @contextmanager
 def inline_everything_mode(should_inline):
@@ -735,7 +740,7 @@ def attrs_with_prefix(module, prefix):
 def warmup_backward(f, *args):
     profiling_count = 3
     results = []
-    for i in range(profiling_count):
+    for _ in range(profiling_count):
         if len(args) > 0:
             r = torch.autograd.grad(f, *args)
             results.append(r)
@@ -759,15 +764,15 @@ def _get_py3_code(code, fn_name):
         spec = importlib.util.spec_from_file_location(fn_name, script_path)
         module = importlib.util.module_from_spec(spec)
         loader = spec.loader
-        assert isinstance(loader, Loader)  # Assert type to meet MyPy requriement
+        assert isinstance(loader, Loader)  # Assert type to meet MyPy requirement
         loader.exec_module(module)
         fn = getattr(module, fn_name)
         return fn
 
-class TensorExprTestOptions():
-    def __init__(self):
+class TensorExprTestOptions:
+    def __init__(self) -> None:
         self.old_profiling_executor = torch._C._jit_set_profiling_executor(True)
-        self.old_profiling_mode = torch._C._jit_set_profiling_mode(True)
+        self.old_profiling_mode = torch._C._get_graph_executor_optimize(True)
 
         self.old_cpu_fuser_state = torch._C._jit_can_fuse_on_cpu()
         self.old_gpu_fuser_state = torch._C._jit_can_fuse_on_gpu()
@@ -782,7 +787,7 @@ class TensorExprTestOptions():
 
     def restore(self):
         torch._C._jit_set_profiling_executor(self.old_profiling_executor)
-        torch._C._jit_set_profiling_mode(self.old_profiling_mode)
+        torch._C._get_graph_executor_optimize(self.old_profiling_mode)
 
         torch._C._jit_set_texpr_fuser_enabled(self.texpr_fuser_state)
         torch._C._jit_override_can_fuse_on_gpu(self.old_gpu_fuser_state)
@@ -791,7 +796,7 @@ class TensorExprTestOptions():
         torch._C._jit_set_te_must_use_llvm_cpu(self.old_te_must_use_llvm_cpu)
 
 def clone_inputs(args):
-    inputs: List[Union[torch.Tensor, List[torch.Tensor]]] = []
+    inputs: list[Union[torch.Tensor, list[torch.Tensor]]] = []
 
     for arg in args:
         if isinstance(arg, torch.Tensor):
@@ -805,7 +810,7 @@ def clone_inputs(args):
 
 def get_traced_sample_variant_pairs(device, dtype, op):
     # tuples of (variant, sample)
-    outputs: List[Tuple[Any, Any]] = []
+    outputs: list[tuple[Any, Any]] = []
 
     samples = op.sample_inputs(device, dtype)
 
@@ -863,7 +868,7 @@ def get_traced_sample_variant_pairs(device, dtype, op):
         return outputs
 
     for sample in samples:
-        for func_type, variant in variants.items():
+        for variant in variants.values():
             if variant is None:
                 continue
 

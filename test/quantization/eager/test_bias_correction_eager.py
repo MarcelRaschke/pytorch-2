@@ -67,8 +67,8 @@ class TestBiasCorrectionEager(QuantizationTestCase):
     @skipIfNoFBGEMM
     def test_linear_chain(self):
         class LinearChain(nn.Module):
-            def __init__(self):
-                super(LinearChain, self).__init__()
+            def __init__(self) -> None:
+                super().__init__()
                 self.linear1 = nn.Linear(3, 4)
                 self.linear2 = nn.Linear(4, 5)
                 self.linear3 = nn.Linear(5, 6)
@@ -86,8 +86,8 @@ class TestBiasCorrectionEager(QuantizationTestCase):
     @skipIfNoFBGEMM
     def test_conv_chain(self):
         class ConvChain(nn.Module):
-            def __init__(self):
-                super(ConvChain, self).__init__()
+            def __init__(self) -> None:
+                super().__init__()
                 self.conv2d1 = nn.Conv2d(3, 4, 5, 5)
                 self.conv2d2 = nn.Conv2d(4, 5, 5, 5)
                 self.conv2d3 = nn.Conv2d(5, 6, 5, 5)

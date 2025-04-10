@@ -1,18 +1,17 @@
-from typing import Iterator, Tuple, Union
-from .api import ShardedOptimizer
+from collections.abc import Iterator
+from typing import Union
 
 import torch.nn as nn
+from torch.distributed._shard.sharded_tensor import ShardedTensor
 
-from torch.distributed._shard.sharded_tensor import (
-    ShardedTensor
-)
+from .api import ShardedOptimizer
+
 
 def named_params_with_sharded_tensor(
     module: nn.Module,
-    prefix: str = '',
+    prefix: str = "",
     recurse: bool = True,
-) -> Iterator[Tuple[str, Union[nn.Parameter, ShardedTensor]]]:
-
+) -> Iterator[tuple[str, Union[nn.Parameter, ShardedTensor]]]:
     r"""Returns an iterator over module parameters (together with the
     ShardedTensor parameters), yielding both the name of the parameter
     as well as the parameter itself. This is typically passed to a
@@ -25,11 +24,12 @@ def named_params_with_sharded_tensor(
             are direct members of this module.
 
     Yields:
-        (string, Union[Tensor, ShardedTensor]): Tuple containing
+        (str, Union[Tensor, ShardedTensor]): Tuple containing
             the name and parameter (or ShardedTensor parameter)
 
     Example::
 
+        >>> # xdoctest: +SKIP
         >>> model = torch.nn.Linear(*linear_size)
         >>> shard_parameter(model, "weight", spec)
         >>> for name, param in named_params_with_sharded_tensor(model):
@@ -45,7 +45,7 @@ def named_params_with_sharded_tensor(
         for name, val in vars(mod).items():
             if isinstance(val, ShardedTensor) and val not in memo:
                 memo.add(val)
-                name = mod_prefix + ('.' if mod_prefix else '') + name
+                name = mod_prefix + ("." if mod_prefix else "") + name
                 yield name, val
 
     # find all nn.Parameters

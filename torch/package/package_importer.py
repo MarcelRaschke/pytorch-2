@@ -1,17 +1,21 @@
+# mypy: allow-untyped-defs
 import builtins
 import importlib
+import importlib.machinery
 import inspect
 import io
 import linecache
-import os.path
+import os
+import sys
 import types
+from collections.abc import Iterable
 from contextlib import contextmanager
-from pathlib import Path
-from typing import cast, Any, BinaryIO, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, cast, Optional, TYPE_CHECKING, Union
 from weakref import WeakValueDictionary
 
 import torch
 from torch.serialization import _get_restore_location, _maybe_decode_ascii
+from torch.types import FileLike
 
 from ._directory_reader import DirectoryReader
 from ._importlib import (
@@ -21,11 +25,42 @@ from ._importlib import (
     _resolve_name,
     _sanity_check,
 )
-from ._mangling import PackageMangler, demangle
+from ._mangling import demangle, PackageMangler
 from ._package_unpickler import PackageUnpickler
-from .file_structure_representation import Directory, _create_directory_from_file_list
-from .glob_group import GlobPattern
+from .file_structure_representation import _create_directory_from_file_list, Directory
 from .importer import Importer
+
+
+if TYPE_CHECKING:
+    from .glob_group import GlobPattern
+
+__all__ = ["PackageImporter"]
+
+
+# This is a list of imports that are implicitly allowed even if they haven't
+# been marked as extern. This is to work around the fact that Torch implicitly
+# depends on numpy and package can't track it.
+# https://github.com/pytorch/MultiPy/issues/46
+IMPLICIT_IMPORT_ALLOWLIST: Iterable[str] = [
+    "numpy",
+    "numpy.core",
+    "numpy.core._multiarray_umath",
+    # FX GraphModule might depend on builtins module and users usually
+    # don't extern builtins. Here we import it here by default.
+    "builtins",
+]
+
+
+# Compatibility name mapping to facilitate upgrade of external modules.
+# The primary motivation is to enable Numpy upgrade that many modules
+# depend on. The latest release of Numpy removed `numpy.str` and
+# `numpy.bool` breaking unpickling for many modules.
+EXTERN_IMPORT_COMPAT_NAME_MAPPING: dict[str, dict[str, Any]] = {
+    "numpy": {
+        "str": str,
+        "bool": bool,
+    },
+}
 
 
 class PackageImporter(Importer):
@@ -45,11 +80,12 @@ class PackageImporter(Importer):
     """The dictionary of already loaded modules from this package, equivalent to ``sys.modules`` but
     local to this importer.
     """
-    modules: Dict[str, types.ModuleType]
+
+    modules: dict[str, types.ModuleType]
 
     def __init__(
         self,
-        file_or_buffer: Union[str, torch._C.PyTorchFileReader, Path, BinaryIO],
+        file_or_buffer: Union[FileLike, torch._C.PyTorchFileReader],
         module_allowed: Callable[[str], bool] = lambda module_name: True,
     ):
         """Open ``file_or_buffer`` for importing. This checks that the imported package only requires modules
@@ -65,12 +101,14 @@ class PackageImporter(Importer):
         Raises:
             ImportError: If the package will use a disallowed module.
         """
+        torch._C._log_api_usage_once("torch.package.PackageImporter")
+
         self.zip_reader: Any
         if isinstance(file_or_buffer, torch._C.PyTorchFileReader):
             self.filename = "<pytorch_file_reader>"
             self.zip_reader = file_or_buffer
-        elif isinstance(file_or_buffer, (Path, str)):
-            self.filename = str(file_or_buffer)
+        elif isinstance(file_or_buffer, (os.PathLike, str)):
+            self.filename = os.fspath(file_or_buffer)
             if not os.path.isdir(self.filename):
                 self.zip_reader = torch._C.PyTorchFileReader(self.filename)
             else:
@@ -78,6 +116,14 @@ class PackageImporter(Importer):
         else:
             self.filename = "<binary>"
             self.zip_reader = torch._C.PyTorchFileReader(file_or_buffer)
+
+        torch._C._log_api_usage_metadata(
+            "torch.package.PackageImporter.metadata",
+            {
+                "serialization_id": self.zip_reader.serialization_id(),
+                "file_name": self.filename,
+            },
+        )
 
         self.root = _PackageNode(None)
         self.modules = {}
@@ -188,14 +234,14 @@ class PackageImporter(Importer):
             name = f"{key}.storage"
 
             if storage_context.has_storage(name):
-                storage = storage_context.get_storage(name, dtype).storage()
+                storage = storage_context.get_storage(name, dtype)._typed_storage()
             else:
                 tensor = self.zip_reader.get_storage_from_record(
                     ".data/" + name, size, dtype
                 )
                 if isinstance(self.zip_reader, torch._C.PyTorchFileReader):
                     storage_context.add_storage(name, tensor)
-                storage = tensor.storage()
+                storage = tensor._typed_storage()
             loaded_storages[key] = restore_location(storage, location)
 
         def persistent_load(saved_id):
@@ -205,7 +251,10 @@ class PackageImporter(Importer):
 
             if typename == "storage":
                 storage_type, key, location, size = data
-                dtype = storage_type.dtype
+                if storage_type is torch.UntypedStorage:
+                    dtype = torch.uint8
+                else:
+                    dtype = storage_type.dtype
 
                 if key not in loaded_storages:
                     load_tensor(
@@ -217,9 +266,9 @@ class PackageImporter(Importer):
                     )
                 storage = loaded_storages[key]
                 # TODO: Once we decide to break serialization FC, we can
-                # stop wrapping with _TypedStorage
-                return torch.storage._TypedStorage(
-                    wrap_storage=storage._untyped(), dtype=dtype
+                # stop wrapping with TypedStorage
+                return torch.storage.TypedStorage(
+                    wrap_storage=storage._untyped_storage, dtype=dtype, _internal=True
                 )
             elif typename == "reduce_package":
                 # to fix BC breaking change, objects on this load path
@@ -237,7 +286,7 @@ class PackageImporter(Importer):
         # Load the data (which may in turn use `persistent_load` to load tensors)
         data_file = io.BytesIO(self.zip_reader.get_record(pickle_file))
         unpickler = self.Unpickler(data_file)
-        unpickler.persistent_load = persistent_load
+        unpickler.persistent_load = persistent_load  # type: ignore[assignment]
 
         @contextmanager
         def set_deserialization_context():
@@ -277,7 +326,7 @@ class PackageImporter(Importer):
 
         Args:
             include (Union[List[str], str]): An optional string e.g. ``"my_package.my_subpackage"``, or optional list of strings
-                for the names of the files to be inluded in the zipfile representation. This can also be
+                for the names of the files to be included in the zipfile representation. This can also be
                 a glob-style pattern, as described in :meth:`PackageExporter.mock`
 
             exclude (Union[List[str], str]): An optional pattern that excludes files whose name match the pattern.
@@ -287,6 +336,22 @@ class PackageImporter(Importer):
         """
         return _create_directory_from_file_list(
             self.filename, self.zip_reader.get_all_records(), include, exclude
+        )
+
+    def python_version(self):
+        """Returns the version of python that was used to create this package.
+
+        Note: this function is experimental and not Forward Compatible. The plan is to move this into a lock
+        file later on.
+
+        Returns:
+            :class:`Optional[str]` a python version e.g. 3.8.9 or None if no version was stored with this package
+        """
+        python_version_path = ".data/python_version"
+        return (
+            self.zip_reader.get_record(python_version_path).decode("utf-8").strip()
+            if self.zip_reader.has_record(python_version_path)
+            else None
         )
 
     def _read_extern(self):
@@ -341,6 +406,9 @@ class PackageImporter(Importer):
         cur: _PathNode = self.root
         for atom in name.split("."):
             if not isinstance(cur, _PackageNode) or atom not in cur.children:
+                if name in IMPLICIT_IMPORT_ALLOWLIST:
+                    module = self.modules[name] = importlib.import_module(name)
+                    return module
                 raise ModuleNotFoundError(
                     f'No module named "{name}" in self-contained archive "{self.filename}"'
                     f" and the module is also not in the list of allowed external modules: {self.extern_modules}",
@@ -349,6 +417,11 @@ class PackageImporter(Importer):
             cur = cur.children[atom]
             if isinstance(cur, _ExternNode):
                 module = self.modules[name] = importlib.import_module(name)
+
+                if compat_mapping := EXTERN_IMPORT_COMPAT_NAME_MAPPING.get(name):
+                    for old_name, new_name in compat_mapping.items():
+                        module.__dict__.setdefault(old_name, new_name)
+
                 return module
         return self._make_module(name, cur.source_file, isinstance(cur, _PackageNode), parent)  # type: ignore[attr-defined]
 
@@ -385,8 +458,8 @@ class PackageImporter(Importer):
 
     # note: copied from cpython's import code, with call to create module replaced with _make_module
     def _do_find_and_load(self, name):
-        path = None
         parent = name.rpartition(".")[0]
+        module_name_no_parent = name.rpartition(".")[-1]
         if parent:
             if parent not in self.modules:
                 self._gcd_import(parent)
@@ -394,11 +467,37 @@ class PackageImporter(Importer):
             if name in self.modules:
                 return self.modules[name]
             parent_module = self.modules[parent]
+
             try:
-                path = parent_module.__path__  # type: ignore[attr-defined]
+                parent_module.__path__  # type: ignore[attr-defined]
+
             except AttributeError:
-                msg = (_ERR_MSG + "; {!r} is not a package").format(name, parent)
-                raise ModuleNotFoundError(msg, name=name) from None
+                # when we attempt to import a package only containing pybinded files,
+                # the parent directory isn't always a package as defined by python,
+                # so we search if the package is actually there or not before calling the error.
+                if isinstance(
+                    parent_module.__loader__,
+                    importlib.machinery.ExtensionFileLoader,
+                ):
+                    if name not in self.extern_modules:
+                        msg = (
+                            _ERR_MSG
+                            + "; {!r} is a c extension module which was not externed. C extension modules \
+                            need to be externed by the PackageExporter in order to be used as we do not support interning them.}."
+                        ).format(name, name)
+                        raise ModuleNotFoundError(msg, name=name) from None
+                    if not isinstance(
+                        parent_module.__dict__.get(module_name_no_parent),
+                        types.ModuleType,
+                    ):
+                        msg = (
+                            _ERR_MSG
+                            + "; {!r} is a c extension package which does not contain {!r}."
+                        ).format(name, parent, name)
+                        raise ModuleNotFoundError(msg, name=name) from None
+                else:
+                    msg = (_ERR_MSG + "; {!r} is not a package").format(name, parent)
+                    raise ModuleNotFoundError(msg, name=name) from None
 
         module = self._load_module(name, parent)
 
@@ -413,7 +512,7 @@ class PackageImporter(Importer):
             return self._do_find_and_load(name)
 
         if module is None:
-            message = "import of {} halted; " "None in sys.modules".format(name)
+            message = f"import of {name} halted; None in sys.modules"
             raise ModuleNotFoundError(message, name=name)
 
         # To handle https://github.com/pytorch/pytorch/issues/57490, where std's
@@ -422,8 +521,9 @@ class PackageImporter(Importer):
         if name == "os":
             self.modules["os.path"] = cast(Any, module).path
         elif name == "typing":
-            self.modules["typing.io"] = cast(Any, module).io
-            self.modules["typing.re"] = cast(Any, module).re
+            if sys.version_info < (3, 13):
+                self.modules["typing.io"] = cast(Any, module).io
+                self.modules["typing.re"] = cast(Any, module).re
 
         return module
 
@@ -462,13 +562,13 @@ class PackageImporter(Importer):
                     else:
                         where = "``from list''"
                     raise TypeError(
-                        f"Item in {where} must be str, " f"not {type(x).__name__}"
+                        f"Item in {where} must be str, not {type(x).__name__}"
                     )
                 elif x == "*":
                     if not recursive and hasattr(module, "__all__"):
                         self._handle_fromlist(module, module.__all__, recursive=True)
                 elif not hasattr(module, x):
-                    from_name = "{}.{}".format(module_name, x)
+                    from_name = f"{module_name}.{x}"
                     try:
                         self._gcd_import(from_name)
                     except ModuleNotFoundError as exc:
@@ -516,13 +616,13 @@ class PackageImporter(Importer):
         """
         if hasattr(package, "__spec__"):
             if package.__spec__.submodule_search_locations is None:
-                raise TypeError("{!r} is not a package".format(package.__spec__.name))
+                raise TypeError(f"{package.__spec__.name!r} is not a package")
             else:
                 return package
         else:
             module = self.import_module(package)
             if module.__spec__.submodule_search_locations is None:
-                raise TypeError("{!r} is not a package".format(package))
+                raise TypeError(f"{package!r} is not a package")
             else:
                 return module
 
@@ -537,7 +637,7 @@ class PackageImporter(Importer):
             return f"{name.replace('.', '/')}"
 
     def _get_or_create_package(
-        self, atoms: List[str]
+        self, atoms: list[str]
     ) -> "Union[_PackageNode, _ExternNode]":
         cur = self.root
         for i, atom in enumerate(atoms):
@@ -596,7 +696,7 @@ class _PathNode:
 class _PackageNode(_PathNode):
     def __init__(self, source_file: Optional[str]):
         self.source_file = source_file
-        self.children: Dict[str, _PathNode] = {}
+        self.children: dict[str, _PathNode] = {}
 
 
 class _ModuleNode(_PathNode):
@@ -618,14 +718,14 @@ _package_imported_modules: WeakValueDictionary = WeakValueDictionary()
 _orig_getfile = inspect.getfile
 
 
-def patched_getfile(object):
+def _patched_getfile(object):
     if inspect.isclass(object):
         if object.__module__ in _package_imported_modules:
             return _package_imported_modules[object.__module__].__file__
     return _orig_getfile(object)
 
 
-inspect.getfile = patched_getfile
+inspect.getfile = _patched_getfile
 
 
 class _PackageResourceReader:

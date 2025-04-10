@@ -4,6 +4,7 @@ import torch
 from torch.testing import FileCheck
 from torch.testing._internal.jit_utils import JitTestCase
 
+
 if __name__ == "__main__":
     raise RuntimeError(
         "This test file is not meant to be run directly, use:\n\n"
@@ -83,6 +84,11 @@ class TestPythonBindings(JitTestCase):
         gr = torch._C.Graph()
         with self.assertRaises(ValueError):
             gr.create("prim::Constant", [None])
+
+    def test_add_input(self):
+        gr = torch._C.Graph()
+        foo_value = gr.addInput("foo")
+        assert foo_value in gr.inputs()
 
     def test_canonicalize(self):
         ir = """

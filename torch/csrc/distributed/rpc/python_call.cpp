@@ -1,10 +1,6 @@
 #include <torch/csrc/distributed/rpc/python_call.h>
 
-#include <c10/util/C++17.h>
-
-namespace torch {
-namespace distributed {
-namespace rpc {
+namespace torch::distributed::rpc {
 
 PythonCall::PythonCall(SerializedPyObj&& serializedPyObj, bool isAsyncExecution)
     : serializedPyObj_(std::move(serializedPyObj)),
@@ -27,7 +23,7 @@ c10::intrusive_ptr<Message> PythonCall::toMessageImpl() && {
 
 std::unique_ptr<PythonCall> PythonCall::fromMessage(const Message& message) {
   TORCH_INTERNAL_ASSERT(
-      message.payload().size() >= 1,
+      !message.payload().empty(),
       "Failed to convert an RPC message to PythonCall, the payload should at "
       "least contain one byte indicating whether this is an async function, "
       "but got payload of size ",
@@ -46,6 +42,4 @@ const SerializedPyObj& PythonCall::serializedPyObj() const {
   return serializedPyObj_;
 }
 
-} // namespace rpc
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::rpc

@@ -3,8 +3,9 @@
 #include <c10/util/irange.h>
 #include <torch/csrc/jit/python/pybind_utils.h>
 
-namespace torch {
-namespace jit {
+#include <iostream>
+
+namespace torch::jit {
 
 ClassTypePtr ConcreteModuleTypeBuilder::createTypeFromThis() const {
   auto cu = get_python_cu();
@@ -148,47 +149,47 @@ TypePtr ConcreteModuleType::getJitType() const {
   return jitType_;
 }
 
-c10::optional<py::object> ConcreteModuleType::getPyClass() const {
+std::optional<py::object> ConcreteModuleType::getPyClass() const {
   if (!data_.pyClass_) {
-    return c10::nullopt;
+    return std::nullopt;
   }
   return data_.pyClass_;
 }
 
-c10::optional<std::vector<std::string>> ConcreteModuleType::findOverloads(
+std::optional<std::vector<std::string>> ConcreteModuleType::findOverloads(
     const std::string& name) const {
   const auto it = data_.overloads_.find(name);
   if (it != data_.overloads_.end()) {
     return it->second;
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
-c10::optional<Function*> ConcreteModuleType::findFunctionAttribute(
+std::optional<Function*> ConcreteModuleType::findFunctionAttribute(
     const std::string& name) const {
   const auto it = data_.functionAttributes_.find(name);
   if (it != data_.functionAttributes_.end()) {
     return it->second.function_->function();
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
-c10::optional<c10::Symbol> ConcreteModuleType::findBuiltinFunction(
+std::optional<c10::Symbol> ConcreteModuleType::findBuiltinFunction(
     const std::string& name) const {
   const auto it = data_.builtinFunctions_.find(name);
   if (it != data_.builtinFunctions_.end()) {
     return it->second;
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
-c10::optional<std::string> ConcreteModuleType::findFailedAttribute(
+std::optional<std::string> ConcreteModuleType::findFailedAttribute(
     const std::string& name) const {
   const auto it = data_.failedAttributes_.find(name);
   if (it != data_.failedAttributes_.end()) {
     return it->second;
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
 bool ConcreteModuleType::isIgnoredAttribute(const std::string& name) const {
@@ -274,8 +275,7 @@ void ConcreteModuleTypeBuilder::addBuiltinFunction(
 void ConcreteModuleTypeBuilder::addModule(
     std::string name,
     std::shared_ptr<ConcreteModuleType> meta) {
-  modules_.emplace_back(
-      ConcreteModuleTypeBuilder::ModuleInfo{std::move(name), std::move(meta)});
+  modules_.emplace_back(std::move(name), std::move(meta));
 }
 
 void ConcreteModuleTypeBuilder::addForwardHook(py::object hook) {
@@ -368,11 +368,11 @@ std::vector<std::pair<std::string, std::shared_ptr<ConcreteModuleType>>>
 ConcreteModuleType::getModulesPy() const {
   std::vector<std::pair<std::string, std::shared_ptr<ConcreteModuleType>>> ret;
 
+  ret.reserve(data_.modules_.size());
   for (const auto& info : data_.modules_) {
-    ret.emplace_back(std::make_pair(info.name_, info.meta_));
+    ret.emplace_back(info.name_, info.meta_);
   }
   return ret;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

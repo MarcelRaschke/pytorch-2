@@ -3,13 +3,13 @@
 #include <ATen/cuda/CUDAGeneratorImpl.h>
 #include <ATen/native/cuda/DistributionTemplates.h>
 
-namespace at { namespace native {
+namespace at::native {
 
-void normal_kernel(const TensorBase &self, double mean, double std, c10::optional<Generator> gen) {
+void normal_kernel(const TensorBase &self, double mean, double std, std::optional<Generator> gen) {
   auto generator = get_generator_or_default<CUDAGeneratorImpl>(gen, cuda::detail::getDefaultCUDAGenerator());
   at::native::templates::cuda::normal_kernel(self, mean, std, generator);
 }
 
-REGISTER_DISPATCH(normal_stub, &normal_kernel);
+REGISTER_DISPATCH(normal_stub, &normal_kernel)
 
-}} // namespace at::native
+} // namespace at::native

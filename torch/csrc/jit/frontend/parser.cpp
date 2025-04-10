@@ -1,13 +1,12 @@
 #include <torch/csrc/jit/frontend/parser.h>
 
-#include <c10/util/Optional.h>
 #include <torch/csrc/jit/frontend/lexer.h>
 #include <torch/csrc/jit/frontend/parse_string_literal.h>
 #include <torch/csrc/jit/frontend/tree.h>
 #include <torch/csrc/jit/frontend/tree_views.h>
+#include <optional>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 Decl mergeTypesFromTypeComment(
     const Decl& decl,
@@ -46,7 +45,7 @@ Decl mergeTypesFromTypeComment(
 }
 
 struct ParserImpl {
-  explicit ParserImpl(const std::shared_ptr<SourceView>& source)
+  explicit ParserImpl(const std::shared_ptr<Source>& source)
       : L(source), shared(sharedParserData()) {}
 
   Ident parseIdent() {
@@ -211,7 +210,7 @@ struct ParserImpl {
     }
     return prefix;
   }
-  c10::optional<TreeRef> maybeParseAssignmentOp() {
+  std::optional<TreeRef> maybeParseAssignmentOp() {
     auto r = L.cur().range;
     switch (L.cur().kind) {
       case TK_PLUS_EQ:
@@ -242,7 +241,7 @@ struct ParserImpl {
         return create_compound('=', r, {}); // no reduction
       } break;
       default:
-        return c10::nullopt;
+        return std::nullopt;
     }
   }
   TreeRef parseTrinary(
@@ -264,8 +263,7 @@ struct ParserImpl {
   }
   Expr parseExp(int precedence) {
     TreeRef prefix;
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    int unary_prec;
+    int unary_prec = 0;
     if (shared.isUnary(L.cur().kind, &unary_prec)) {
       auto kind = L.cur().kind;
       auto pos = L.cur().range;
@@ -284,8 +282,7 @@ struct ParserImpl {
     } else {
       prefix = parseBaseExp();
     }
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    int binary_prec;
+    int binary_prec = 0;
     while (shared.isBinary(L.cur().kind, &binary_prec)) {
       if (binary_prec <= precedence) // not allowed to parse something which is
         // not greater than 'precedence'
@@ -801,7 +798,7 @@ struct ParserImpl {
   SharedParserData& shared;
 };
 
-Parser::Parser(const std::shared_ptr<SourceView>& src)
+Parser::Parser(const std::shared_ptr<Source>& src)
     : pImpl(new ParserImpl(src)) {}
 
 Parser::~Parser() = default;
@@ -822,5 +819,4 @@ Expr Parser::parseExp() {
   return pImpl->parseExp();
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

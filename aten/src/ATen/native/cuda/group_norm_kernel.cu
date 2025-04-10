@@ -1,13 +1,13 @@
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
 #include <ATen/native/group_norm.h>
 
 #include <type_traits>
 
 #include <thrust/tuple.h>
 
-#include <ATen/ATen.h>
+#include <ATen/core/Tensor.h>
 #include <ATen/AccumulateType.h>
 #include <ATen/Dispatch.h>
-#include <ATen/NativeFunctions.h>
 #include <ATen/native/SharedReduceOps.h>
 #include <ATen/native/TensorIterator.h>
 #include <c10/cuda/CUDAMathCompat.h>
@@ -15,8 +15,13 @@
 #include <ATen/native/cuda/Loops.cuh>
 #include <ATen/native/cuda/block_reduce.cuh>
 
-namespace at {
-namespace native {
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#else
+#include <ATen/ops/empty.h>
+#endif
+
+namespace at::native {
 
 namespace {
 
@@ -31,9 +36,9 @@ __global__ void RowwiseMomentsCUDAKernel(
     T* mean,
     T* rstd) {
   using T_ACC = acc_type<T, true>;
-  using WelfordType = WelfordData<T_ACC, int64_t, T_ACC>;
+  using WelfordType = WelfordData<T_ACC, int64_t>;
   using WelfordOp =
-      WelfordOps<T_ACC, T_ACC, int64_t, T_ACC, thrust::pair<T_ACC, T_ACC>>;
+      WelfordOps<T_ACC, T_ACC, int64_t, thrust::pair<T_ACC, T_ACC>>;
 
   const int64_t i = blockIdx.x;
   WelfordOp welford_op = {/*correction=*/0, /*take_sqrt=*/false};
@@ -78,7 +83,7 @@ __global__ void ComputeFusedParamsCUDAKernel(
     acc_type<T, true>* a,
     acc_type<T, true>* b) {
   using T_ACC = acc_type<T, true>;
-  const int64_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t index = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (index < N * C) {
     const int64_t ng = index / (C / group);
     const int64_t c = index % C;
@@ -150,7 +155,7 @@ __global__ void GammaBeta1dBackwardCUDAKernel1(
     T* dgamma,
     T* dbeta) {
   using T_ACC = acc_type<T, true>;
-  const int64_t c = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t c = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (c < C) {
     const int64_t G = group;
     const int64_t D = C / G;
@@ -190,7 +195,7 @@ __global__ void GammaBeta1dBackwardCUDAKernel2(
   using T_ACC = acc_type<T, true>;
   __shared__ T_ACC g_shared[kReduceTileSize][kReduceTileSize + 1];
   __shared__ T_ACC b_shared[kReduceTileSize][kReduceTileSize + 1];
-  const int64_t c = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t c = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   T_ACC dg_sum1 = 0;
   T_ACC dg_sum2 = 0;
   T_ACC db_sum1 = 0;
@@ -360,7 +365,7 @@ __global__ void GammaBetaBackwardCUDAKernel1(
     T* dgamma,
     T* dbeta) {
   using T_ACC = acc_type<T, true>;
-  const int64_t c = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t c = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   if (c < C) {
     const int64_t G = group;
     const int64_t D = C / G;
@@ -398,7 +403,7 @@ __global__ void GammaBetaBackwardCUDAKernel2(
   using T_ACC = acc_type<T, true>;
   __shared__ T_ACC g_shared[kReduceTileSize][kReduceTileSize + 1];
   __shared__ T_ACC b_shared[kReduceTileSize][kReduceTileSize + 1];
-  const int64_t c = blockIdx.x * blockDim.x + threadIdx.x;
+  const int64_t c = ((int64_t) blockIdx.x) * blockDim.x + threadIdx.x;
   T_ACC dg_sum1 = 0;
   T_ACC dg_sum2 = 0;
   T_ACC db_sum1 = 0;
@@ -491,11 +496,11 @@ void GroupNorm1dForward(
     auto iter = TensorIteratorConfig()
                     .resize_outputs(false)
                     .add_owned_output(Y.view({N, G, D}))
-                    .add_owned_input(X.view({N, G, D}))
+                    .add_owned_const_input(X.view({N, G, D}))
                     .add_owned_input(mean.view({N, G, 1}))
                     .add_owned_input(rstd.view({N, G, 1}))
-                    .add_owned_input(gamma.view({1, G, D}))
-                    .add_owned_input(beta.view({1, G, D}))
+                    .add_owned_const_input(gamma.view({1, G, D}))
+                    .add_owned_const_input(beta.view({1, G, D}))
                     .build();
     gpu_kernel(iter, [] GPU_LAMBDA(T x, T mean, T rstd, T gamma, T beta) -> T {
       return (static_cast<T_ACC>(x) - static_cast<T_ACC>(mean)) *
@@ -506,10 +511,10 @@ void GroupNorm1dForward(
     auto iter = TensorIteratorConfig()
                     .resize_outputs(false)
                     .add_owned_output(Y.view({N, G, D}))
-                    .add_owned_input(X.view({N, G, D}))
+                    .add_owned_const_input(X.view({N, G, D}))
                     .add_owned_input(mean.view({N, G, 1}))
                     .add_owned_input(rstd.view({N, G, 1}))
-                    .add_owned_input(gamma.view({1, G, D}))
+                    .add_owned_const_input(gamma.view({1, G, D}))
                     .build();
     gpu_kernel(iter, [] GPU_LAMBDA(T x, T mean, T rstd, T gamma) -> T {
       return (static_cast<T_ACC>(x) - static_cast<T_ACC>(mean)) *
@@ -519,10 +524,10 @@ void GroupNorm1dForward(
     auto iter = TensorIteratorConfig()
                     .resize_outputs(false)
                     .add_owned_output(Y.view({N, G, D}))
-                    .add_owned_input(X.view({N, G, D}))
+                    .add_owned_const_input(X.view({N, G, D}))
                     .add_owned_input(mean.view({N, G, 1}))
                     .add_owned_input(rstd.view({N, G, 1}))
-                    .add_owned_input(beta.view({1, G, D}))
+                    .add_owned_const_input(beta.view({1, G, D}))
                     .build();
     gpu_kernel(iter, [] GPU_LAMBDA(T x, T mean, T rstd, T beta) -> T {
       return (static_cast<T_ACC>(x) - static_cast<T_ACC>(mean)) *
@@ -533,7 +538,7 @@ void GroupNorm1dForward(
     auto iter = TensorIteratorConfig()
                     .resize_outputs(false)
                     .add_owned_output(Y.view({N * G, D}))
-                    .add_owned_input(X.view({N * G, D}))
+                    .add_owned_const_input(X.view({N * G, D}))
                     .add_owned_input(mean.view({N * G, 1}))
                     .add_owned_input(rstd.view({N * G, 1}))
                     .build();
@@ -567,9 +572,9 @@ void GroupNormKernelImplInternal(
   }
   const int64_t G = group;
   const int64_t D = C / G;
-  const T* X_data = X.data_ptr<T>();
-  T* mean_data = mean.data_ptr<T>();
-  T* rstd_data = rstd.data_ptr<T>();
+  const T* X_data = X.const_data_ptr<T>();
+  T* mean_data = mean.mutable_data_ptr<T>();
+  T* rstd_data = rstd.mutable_data_ptr<T>();
 
   cudaStream_t cuda_stream = at::cuda::getCurrentCUDAStream();
   const int64_t num_threads = D * HxW < cuda_utils::kCUDABlockReduceNumThreads
@@ -585,7 +590,7 @@ void GroupNormKernelImplInternal(
     auto iter = TensorIteratorConfig()
                     .resize_outputs(false)
                     .add_owned_output(Y.view({N * G, D * HxW}))
-                    .add_owned_input(X.view({N * G, D * HxW}))
+                    .add_owned_const_input(X.view({N * G, D * HxW}))
                     .add_owned_input(mean.view({N * G, 1}))
                     .add_owned_input(rstd.view({N * G, 1}))
                     .build();
@@ -600,13 +605,13 @@ void GroupNormKernelImplInternal(
         : X.scalar_type();
     Tensor a = at::empty({N, C}, X.options().dtype(kAccType));
     Tensor b = at::empty({N, C}, X.options().dtype(kAccType));
-    const T* gamma_data = gamma.defined() ? gamma.data_ptr<T>() : nullptr;
-    const T* beta_data = beta.defined() ? beta.data_ptr<T>() : nullptr;
-    T_ACC* a_data = a.data_ptr<T_ACC>();
-    T_ACC* b_data = b.data_ptr<T_ACC>();
+    const T* gamma_data = gamma.defined() ? gamma.const_data_ptr<T>() : nullptr;
+    const T* beta_data = beta.defined() ? beta.const_data_ptr<T>() : nullptr;
+    T_ACC* a_data = a.mutable_data_ptr<T_ACC>();
+    T_ACC* b_data = b.mutable_data_ptr<T_ACC>();
 
     // TODO: Since there is some issues in gpu_kernel_multiple_outputs, we are
-    // using maunal kernel here. Make it using gpu_kernel_multiple_outputs once
+    // using manual kernel here. Make it using gpu_kernel_multiple_outputs once
     // the issue fixed.
     const int64_t B = (N * C + kCUDANumThreads - 1) / kCUDANumThreads;
     ComputeFusedParamsCUDAKernel<T><<<B, kCUDANumThreads, 0, cuda_stream>>>(
@@ -614,10 +619,10 @@ void GroupNormKernelImplInternal(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
     auto iter = TensorIteratorConfig()
-                    .check_all_same_dtype(std::is_same<T, T_ACC>::value)
+                    .check_all_same_dtype(std::is_same_v<T, T_ACC>)
                     .resize_outputs(false)
                     .add_owned_output(Y.view({N * C, HxW}))
-                    .add_owned_input(X.view({N * C, HxW}))
+                    .add_owned_const_input(X.view({N * C, HxW}))
                     .add_owned_input(a.view({N * C, 1}))
                     .add_owned_input(b.view({N * C, 1}))
                     .build();
@@ -677,22 +682,22 @@ void GroupNorm1dBackward(
   using T_ACC = acc_type<T, true>;
   const int64_t G = group;
   const int64_t D = C / G;
-  const T* dY_data = dY.data_ptr<T>();
-  const T* X_data = X.data_ptr<T>();
-  const T* mean_data = mean.data_ptr<T>();
-  const T* rstd_data = rstd.data_ptr<T>();
+  const T* dY_data = dY.const_data_ptr<T>();
+  const T* X_data = X.const_data_ptr<T>();
+  const T* mean_data = mean.const_data_ptr<T>();
+  const T* rstd_data = rstd.const_data_ptr<T>();
 
   cudaStream_t cuda_stream = at::cuda::getCurrentCUDAStream();
   if (dX.defined()) {
-    const T* gamma_data = gamma.defined() ? gamma.data_ptr<T>() : nullptr;
+    const T* gamma_data = gamma.defined() ? gamma.const_data_ptr<T>() : nullptr;
     const auto kAccType =
         (X.scalar_type() == kHalf || X.scalar_type() == kBFloat16)
         ? kFloat
         : X.scalar_type();
     Tensor c2 = at::empty({N, G}, X.options().dtype(kAccType));
     Tensor c3 = at::empty({N, G}, X.options().dtype(kAccType));
-    T_ACC* c2_data = c2.data_ptr<T_ACC>();
-    T_ACC* c3_data = c3.data_ptr<T_ACC>();
+    T_ACC* c2_data = c2.mutable_data_ptr<T_ACC>();
+    T_ACC* c3_data = c3.mutable_data_ptr<T_ACC>();
     const int64_t num_threads = (C / G) < cuda_utils::kCUDABlockReduceNumThreads
         ? at::cuda::warp_size()
         : cuda_utils::kCUDABlockReduceNumThreads;
@@ -711,15 +716,15 @@ void GroupNorm1dBackward(
 
     if (gamma.defined()) {
       auto iter = TensorIteratorConfig()
-                      .check_all_same_dtype(std::is_same<T, T_ACC>::value)
+                      .check_all_same_dtype(std::is_same_v<T, T_ACC>)
                       .resize_outputs(false)
                       .add_owned_output(dX.view({N, G, D}))
-                      .add_owned_input(dY.view({N, G, D}))
-                      .add_owned_input(X.view({N, G, D}))
-                      .add_owned_input(rstd.view({N, G, 1}))
-                      .add_owned_input(gamma.view({1, G, D}))
-                      .add_owned_input(c2.view({N, G, 1}))
-                      .add_owned_input(c3.view({N, G, 1}))
+                      .add_owned_const_input(dY.view({N, G, D}))
+                      .add_owned_const_input(X.view({N, G, D}))
+                      .add_owned_const_input(rstd.view({N, G, 1}))
+                      .add_owned_const_input(gamma.view({1, G, D}))
+                      .add_owned_const_input(c2.view({N, G, 1}))
+                      .add_owned_const_input(c3.view({N, G, 1}))
                       .build();
       gpu_kernel(
           iter,
@@ -731,14 +736,14 @@ void GroupNorm1dBackward(
           });
     } else {
       auto iter = TensorIteratorConfig()
-                      .check_all_same_dtype(std::is_same<T, T_ACC>::value)
+                      .check_all_same_dtype(std::is_same_v<T, T_ACC>)
                       .resize_outputs(false)
                       .add_owned_output(dX.view({N * G, D}))
-                      .add_owned_input(dY.view({N * G, D}))
-                      .add_owned_input(X.view({N * G, D}))
-                      .add_owned_input(rstd.view({N * G, 1}))
-                      .add_owned_input(c2.view({N * G, 1}))
-                      .add_owned_input(c3.view({N * G, 1}))
+                      .add_owned_const_input(dY.view({N * G, D}))
+                      .add_owned_const_input(X.view({N * G, D}))
+                      .add_owned_const_input(rstd.view({N * G, 1}))
+                      .add_owned_const_input(c2.view({N * G, 1}))
+                      .add_owned_const_input(c3.view({N * G, 1}))
                       .build();
       gpu_kernel(
           iter, [] GPU_LAMBDA(T dy, T x, T rstd, T_ACC c2, T_ACC c3) -> T {
@@ -749,8 +754,8 @@ void GroupNorm1dBackward(
     }
   }
   if (dgamma.defined() || dbeta.defined()) {
-    T* dgamma_data = dgamma.defined() ? dgamma.data_ptr<T>() : nullptr;
-    T* dbeta_data = dbeta.defined() ? dbeta.data_ptr<T>() : nullptr;
+    T* dgamma_data = dgamma.defined() ? dgamma.mutable_data_ptr<T>() : nullptr;
+    T* dbeta_data = dbeta.defined() ? dbeta.mutable_data_ptr<T>() : nullptr;
     if (N <= 128) {
       const int64_t B = (C + kCUDANumThreads - 1) / kCUDANumThreads;
       GammaBeta1dBackwardCUDAKernel1<T><<<B, kCUDANumThreads, 0, cuda_stream>>>(
@@ -767,7 +772,7 @@ void GroupNorm1dBackward(
     } else {
       const int64_t B = (C + kReduceTileSize - 1) / kReduceTileSize;
       // The algorithm for colwise reduction here is to accumulate each 32 cols
-      // to a 32 * 32 tile and write the tile to shared memmory. Then do warp
+      // to a 32 * 32 tile and write the tile to shared memory. Then do warp
       // reduce for each col in the tile. So here the blockDim must be (32, 16).
       constexpr int kThreadX = kReduceTileSize;
       constexpr int kThreadY = kReduceTileSize / 2;
@@ -821,19 +826,19 @@ void GroupNormBackwardKernelImplInternal(
     return;
   }
 
-  const T* dY_data = dY.data_ptr<T>();
-  const T* X_data = X.data_ptr<T>();
-  const T* mean_data = mean.data_ptr<T>();
-  const T* rstd_data = rstd.data_ptr<T>();
-  const T* gamma_data = gamma.defined() ? gamma.data_ptr<T>() : nullptr;
+  const T* dY_data = dY.const_data_ptr<T>();
+  const T* X_data = X.const_data_ptr<T>();
+  const T* mean_data = mean.const_data_ptr<T>();
+  const T* rstd_data = rstd.const_data_ptr<T>();
+  const T* gamma_data = gamma.defined() ? gamma.const_data_ptr<T>() : nullptr;
   const auto kAccType =
       (X.scalar_type() == kHalf || X.scalar_type() == kBFloat16)
       ? kFloat
       : X.scalar_type();
   Tensor ds = at::empty({N, C}, X.options().dtype(kAccType));
   Tensor db = at::empty({N, C}, X.options().dtype(kAccType));
-  T_ACC* ds_data = ds.data_ptr<T_ACC>();
-  T_ACC* db_data = db.data_ptr<T_ACC>();
+  T_ACC* ds_data = ds.mutable_data_ptr<T_ACC>();
+  T_ACC* db_data = db.mutable_data_ptr<T_ACC>();
 
   if (HxW == 1) {
     GroupNorm1dBackward<T>(
@@ -853,15 +858,15 @@ void GroupNormBackwardKernelImplInternal(
     Tensor c1 = at::empty({0}, X.options().dtype(kAccType));
     Tensor c2 = at::empty({N, G}, X.options().dtype(kAccType));
     Tensor c3 = at::empty({N, G}, X.options().dtype(kAccType));
-    T_ACC* c2_data = c2.data_ptr<T_ACC>();
-    T_ACC* c3_data = c3.data_ptr<T_ACC>();
+    T_ACC* c2_data = c2.mutable_data_ptr<T_ACC>();
+    T_ACC* c3_data = c3.mutable_data_ptr<T_ACC>();
 
     if (gamma.defined()) {
       auto iter = TensorIteratorConfig()
-                      .check_all_same_dtype(std::is_same<T, T_ACC>::value)
+                      .check_all_same_dtype(std::is_same_v<T, T_ACC>)
                       .add_output(c1)
-                      .add_owned_input(rstd.view({N, G, 1}))
-                      .add_owned_input(gamma.view({1, G, D}))
+                      .add_owned_const_input(rstd.view({N, G, 1}))
+                      .add_owned_const_input(gamma.view({1, G, D}))
                       .build();
       gpu_kernel(iter, [] GPU_LAMBDA(T rstd, T gamma) -> T_ACC {
         return static_cast<T_ACC>(rstd) * static_cast<T_ACC>(gamma);
@@ -887,14 +892,14 @@ void GroupNormBackwardKernelImplInternal(
 
     if (gamma.defined()) {
       auto iter = TensorIteratorConfig()
-                      .check_all_same_dtype(std::is_same<T, T_ACC>::value)
+                      .check_all_same_dtype(std::is_same_v<T, T_ACC>)
                       .resize_outputs(false)
                       .add_owned_output(dX.view({N * G, D, HxW}))
-                      .add_owned_input(dY.view({N * G, D, HxW}))
-                      .add_owned_input(X.view({N * G, D, HxW}))
-                      .add_owned_input(c1.view({N * G, D, 1}))
-                      .add_owned_input(c2.view({N * G, 1, 1}))
-                      .add_owned_input(c3.view({N * G, 1, 1}))
+                      .add_owned_const_input(dY.view({N * G, D, HxW}))
+                      .add_owned_const_input(X.view({N * G, D, HxW}))
+                      .add_owned_const_input(c1.view({N * G, D, 1}))
+                      .add_owned_const_input(c2.view({N * G, 1, 1}))
+                      .add_owned_const_input(c3.view({N * G, 1, 1}))
                       .build();
       gpu_kernel(
           iter, [] GPU_LAMBDA(T dy, T x, T_ACC c1, T_ACC c2, T_ACC c3) -> T {
@@ -903,14 +908,14 @@ void GroupNormBackwardKernelImplInternal(
           });
     } else {
       auto iter = TensorIteratorConfig()
-                      .check_all_same_dtype(std::is_same<T, T_ACC>::value)
+                      .check_all_same_dtype(std::is_same_v<T, T_ACC>)
                       .resize_outputs(false)
                       .add_owned_output(dX.view({N * G, D * HxW}))
-                      .add_owned_input(dY.view({N * G, D * HxW}))
-                      .add_owned_input(X.view({N * G, D * HxW}))
-                      .add_owned_input(rstd.view({N * G, 1}))
-                      .add_owned_input(c2.view({N * G, 1}))
-                      .add_owned_input(c3.view({N * G, 1}))
+                      .add_owned_const_input(dY.view({N * G, D * HxW}))
+                      .add_owned_const_input(X.view({N * G, D * HxW}))
+                      .add_owned_const_input(rstd.view({N * G, 1}))
+                      .add_owned_const_input(c2.view({N * G, 1}))
+                      .add_owned_const_input(c3.view({N * G, 1}))
                       .build();
       gpu_kernel(
           iter, [] GPU_LAMBDA(T dy, T x, T_ACC c1, T_ACC c2, T_ACC c3) -> T {
@@ -920,8 +925,8 @@ void GroupNormBackwardKernelImplInternal(
     }
   }
   if (dgamma.defined() || dbeta.defined()) {
-    T* dgamma_data = dgamma.defined() ? dgamma.data_ptr<T>() : nullptr;
-    T* dbeta_data = dbeta.defined() ? dbeta.data_ptr<T>() : nullptr;
+    T* dgamma_data = dgamma.defined() ? dgamma.mutable_data_ptr<T>() : nullptr;
+    T* dbeta_data = dbeta.defined() ? dbeta.mutable_data_ptr<T>() : nullptr;
     if (N <= 128) {
       // For small batch size, do colwise reduce directly.
       const int64_t B = (C + kCUDANumThreads - 1) / kCUDANumThreads;
@@ -939,7 +944,7 @@ void GroupNormBackwardKernelImplInternal(
     } else {
       const int64_t B = (C + kReduceTileSize - 1) / kReduceTileSize;
       // The algorithm for colwise reduction here is to accumulate each 32 cols
-      // to a 32 * 32 tile and write the tile to shared memmory. Then do warp
+      // to a 32 * 32 tile and write the tile to shared memory. Then do warp
       // reduce for each col in the tile. So here the blockDim must be (32, 16).
       constexpr int kThreadX = kReduceTileSize;
       constexpr int kThreadY = kReduceTileSize / 2;
@@ -985,8 +990,7 @@ void GroupNormBackwardKernelImpl(
 
 } // namespace
 
-REGISTER_DISPATCH(GroupNormKernel, &GroupNormKernelImpl);
-REGISTER_DISPATCH(GroupNormBackwardKernel, &GroupNormBackwardKernelImpl);
+REGISTER_DISPATCH(GroupNormKernel, &GroupNormKernelImpl)
+REGISTER_DISPATCH(GroupNormBackwardKernel, &GroupNormBackwardKernelImpl)
 
-} // namespace native
-} // namespace at
+} // namespace at::native

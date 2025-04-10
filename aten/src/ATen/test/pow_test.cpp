@@ -10,12 +10,6 @@
 #include <vector>
 #include <type_traits>
 
-#ifdef _WIN32
-#define DISABLED_ON_WINDOWS(x) DISABLED_##x
-#else
-#define DISABLED_ON_WINDOWS(x) x
-#endif
-
 using namespace at;
 
 namespace {
@@ -35,16 +29,16 @@ const std::vector<int> ints {
   int_min,
   int_min + 1,
   int_min + 2,
-  static_cast<int>(-sqrt(int_max)),
+  static_cast<int>(-sqrt(static_cast<double>(int_max))),
   -3, -2, -1, 0, 1, 2, 3,
-  static_cast<int>(sqrt(int_max)),
+  static_cast<int>(sqrt(static_cast<double>(int_max))),
   int_max - 2,
   int_max - 1,
   int_max
 };
 const std::vector<int> non_neg_ints {
   0, 1, 2, 3,
-  static_cast<int>(sqrt(int_max)),
+  static_cast<int>(sqrt(static_cast<double>(int_max))),
   int_max - 2,
   int_max - 1,
   int_max
@@ -53,16 +47,16 @@ const std::vector<int64_t> longs {
   long_min,
   long_min + 1,
   long_min + 2,
-  static_cast<int64_t>(-sqrt(long_max)),
+  static_cast<int64_t>(-sqrt(static_cast<double>(long_max))),
   -3, -2, -1, 0, 1, 2, 3,
-  static_cast<int64_t>(sqrt(long_max)),
+  static_cast<int64_t>(sqrt(static_cast<double>(long_max))),
   long_max - 2,
   long_max - 1,
   long_max
 };
 const std::vector<int64_t> non_neg_longs {
   0, 1, 2, 3,
-  static_cast<int64_t>(sqrt(long_max)),
+  static_cast<int64_t>(sqrt(static_cast<double>(long_max))),
   long_max - 2,
   long_max - 1,
   long_max
@@ -87,7 +81,7 @@ const std::vector<double> doubles {
 };
 
 template <class T,
-  typename std::enable_if<std::is_floating_point<T>::value,T>::type* = nullptr>
+  typename std::enable_if_t<std::is_floating_point_v<T>, T>* = nullptr>
 void assert_eq(T val, T act, T exp) {
   if (std::isnan(act) || std::isnan(exp)) {
     return;
@@ -96,7 +90,7 @@ void assert_eq(T val, T act, T exp) {
 }
 
 template <class T,
-  typename std::enable_if<std::is_integral<T>::value, T>::type* = nullptr>
+  typename std::enable_if_t<std::is_integral_v<T>, T>* = nullptr>
 void assert_eq(T val, T act, T exp) {
   if (val != 0 && act == 0) {
     return;
@@ -112,12 +106,12 @@ void assert_eq(T val, T act, T exp) {
 }
 
 template <class T,
-  typename std::enable_if<std::is_floating_point<T>::value,T>::type* = nullptr>
+  typename std::enable_if_t<std::is_floating_point_v<T>, T>* = nullptr>
 T typed_pow(T base, T exp) {
   return std::pow(base, exp);
 }
 template <class T,
-  typename std::enable_if<std::is_integral<T>::value,T>::type* = nullptr>
+  typename std::enable_if_t<std::is_integral_v<T>, T>* = nullptr>
 T typed_pow(T base, T exp) {
   return native::powi(base, exp);
 }
@@ -128,7 +122,7 @@ void tensor_pow_scalar(const Vals vals, const Pows pows, const torch::ScalarType
 
   for (const auto pow : pows) {
     // NOLINTNEXTLINE(clang-diagnostic-implicit-const-int-float-conversion)
-    if ( dtype == kInt && pow > std::numeric_limits<int>::max()) {
+    if ( dtype == kInt && pow > static_cast<float>(std::numeric_limits<int>::max())) {
       // value cannot be converted to type int without overflow
       // NOLINTNEXTLINE(hicpp-avoid-goto,cppcoreguidelines-avoid-goto)
       EXPECT_THROW(tensor.pow(pow), std::runtime_error);
@@ -204,7 +198,7 @@ void tensor_pow_tensor(const Vals vals, c10::ScalarType vals_dtype, Pows pows, c
   std::cout.precision(dbl::max_digits10);
 
   const auto vals_tensor = torch::tensor(vals, vals_dtype);
-  for (const auto shift : c10::irange(pows.size())) {
+  for ([[maybe_unused]] const auto shirt : c10::irange(pows.size())) {
     const auto pows_tensor = torch::tensor(pows, pows_dtype);
 
     const auto actual_pow = vals_tensor.pow(pows_tensor);

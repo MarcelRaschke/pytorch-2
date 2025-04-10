@@ -5,8 +5,7 @@
 
 #include <torch/csrc/lazy/core/ir.h>
 
-namespace torch {
-namespace lazy {
+namespace torch::lazy {
 
 class TORCH_API Util {
  public:
@@ -25,22 +24,22 @@ class TORCH_API Util {
   // this API. The returned post-order can be empty if the node has already been
   // emitted inside the emission map. An error is generated if a loop is
   // detected.
-  static std::vector<Node*> ComputePostOrder(
+  static std::vector<const Node*> ComputePostOrder(
       const Node* node,
       EmissionMap* emap);
 
-  static std::vector<Node*> ComputePostOrder(
-      c10::ArrayRef<Node*> nodes,
+  static std::vector<const Node*> ComputePostOrder(
+      c10::ArrayRef<const Node*> nodes,
       EmissionMap* emap);
 
   // Same as above, but computes the post order on the set of nodes specified as
   // argument.
-  static std::vector<Node*> ComputePostOrder(c10::ArrayRef<Node*> nodes);
+  static std::vector<const Node*> ComputePostOrder(
+      c10::ArrayRef<const Node*> nodes);
 
   // Retrieves the number of nodes within the graph whose sink are passed in the
   // nodes argument.
-  static size_t GetGraphSize(c10::ArrayRef<Node*> nodes);
+  static size_t GetGraphSize(c10::ArrayRef<const Node*> nodes);
 };
 
-} // namespace lazy
-} // namespace torch
+} // namespace torch::lazy

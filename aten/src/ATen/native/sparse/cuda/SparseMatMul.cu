@@ -5,8 +5,8 @@
 #include <ATen/NamedTensorUtils.h>
 #include <ATen/Parallel.h>
 #include <ATen/SparseTensorImpl.h>
-#include <ATen/SparseTensorUtils.h>
 #include <ATen/native/Resize.h>
+#include <ATen/native/SparseTensorUtils.h>
 #include <cuda_runtime.h>
 #include <type_traits>
 
@@ -50,8 +50,7 @@
 #include <library_types.h>
 #endif
 
-namespace at {
-namespace native {
+namespace at::native {
 
 namespace {
 
@@ -70,7 +69,7 @@ Tensor _to_csr_int(const Tensor& rowIndices, int64_t dim, int64_t nnz) {
 #pragma push
 // NVCC complains that confirm_mult_size is not used,
 // but it is used in specializations of CusparseMatrixMultiplyOp below
-#pragma diag_suppress 177   // Function was declared but never referenced
+#pragma nv_diag_suppress 177   // Function was declared but never referenced
 int confirm_mult_size(const std::vector<int>& mat1_size, const std::vector<int>& mat2_size) {
   TORCH_CHECK(
       mat1_size[1] == mat2_size[0],
@@ -180,6 +179,18 @@ struct csrOutput {
     cusparseDestroyMatDescr(description_);
   }
 
+  csrOutput(const csrOutput&) = delete;
+  csrOutput& operator=(const csrOutput&) = delete;
+  csrOutput(csrOutput&& rhs) {
+    csr_indices_ = std::move(rhs.csr_indices_);
+    csr_pointers_ = std::move(rhs.csr_pointers_);
+    csr_values_ = std::move(rhs.csr_values_);
+    nnz_ = rhs.nnz_;
+    size_ = std::move(rhs.size_);
+    description_ = rhs.description_;
+    rhs.description_ = 0;
+  }
+  csrOutput& operator=(csrOutput&&) = delete;
   int size(int index) const {
     return size_.at(index);
   }
@@ -196,12 +207,12 @@ struct CusparseMatrixMultiplyOp {
 
   CusparseMatrixMultiplyOp() {
     static_assert(
-      std::is_same<c10::Half, scalar_t>::value ||
-          std::is_same<c10::BFloat16, scalar_t>::value ||
-          std::is_same<float, scalar_t>::value ||
-          std::is_same<double, scalar_t>::value ||
-          std::is_same<c10::complex<float>, scalar_t>::value ||
-          std::is_same<c10::complex<double>, scalar_t>::value,
+      std::is_same_v<c10::Half, scalar_t> ||
+          std::is_same_v<c10::BFloat16, scalar_t> ||
+          std::is_same_v<float, scalar_t> ||
+          std::is_same_v<double, scalar_t> ||
+          std::is_same_v<c10::complex<float>, scalar_t> ||
+          std::is_same_v<c10::complex<double>, scalar_t>,
       "cusparseSpGEMM only supports data type of half, bfloat16, float, double and complex float, double.");
     // SpGEMM Computation
     TORCH_CUDASPARSE_CHECK(cusparseSpGEMM_createDescr(&spgemmDesc));
@@ -235,9 +246,9 @@ struct CusparseMatrixMultiplyOp {
     cusparseOperation_t opB = CUSPARSE_OPERATION_NON_TRANSPOSE;
 
     csrMatrixRef<scalar_t> C(
-      nullptr,
-      nullptr,
-      nullptr,
+      dC_columns,
+      dC_csrOffsets,
+      dC_values,
       /*nnz*/0,
       {A_num_rows, B_num_cols}
     );
@@ -283,7 +294,7 @@ struct CusparseMatrixMultiplyOp {
 
     at::DataPtr dataPtr1 = allocator.allocate(bufferSize1);
     dBuffer1 = dataPtr1.get();
-    // inspect the matrices A and B to understand the memory requiremnent for
+    // inspect the matrices A and B to understand the memory requirement for
     // the next step
     TORCH_CUDASPARSE_CHECK(cusparseSpGEMM_workEstimation(
         handle,
@@ -388,7 +399,7 @@ struct CusparseMatrixMultiplyOp {
       Tensor &output_values,
       Tensor &output_indices)
   {
-    TORCH_INTERNAL_ASSERT(false, "cusparse csr sparse-sparse MM only supports data type of float and double.");
+    static_assert(false&&sizeof(scalar_t), "cusparse csr sparse-sparse MM only supports data type of float and double.");
   }
 };
 
@@ -658,12 +669,12 @@ void sparse_sparse_matmul_cuda_kernel(
     const Tensor& mat2) {
 
   static_assert(
-    std::is_same<c10::Half, scalar_t>::value ||
-        std::is_same<c10::BFloat16, scalar_t>::value ||
-        std::is_same<float, scalar_t>::value ||
-        std::is_same<double, scalar_t>::value ||
-        std::is_same<c10::complex<float>, scalar_t>::value ||
-        std::is_same<c10::complex<double>, scalar_t>::value,
+    std::is_same_v<c10::Half, scalar_t> ||
+        std::is_same_v<c10::BFloat16, scalar_t> ||
+        std::is_same_v<float, scalar_t> ||
+        std::is_same_v<double, scalar_t> ||
+        std::is_same_v<c10::complex<float>, scalar_t> ||
+        std::is_same_v<c10::complex<double>, scalar_t>,
     "sparse_sparse_matmul_cuda_kernel only supports data type of half, bfloat16, float, double and complex float, double.");
 
   // older versions of cusparse on Windows segfault for complex128 dtype
@@ -734,13 +745,13 @@ void sparse_sparse_matmul_cuda_kernel(
 
   output_values.set_(csr_output.csr_values_);
   output_indices.resize_({2, nnz});
-  auto output_indices_accessor = output_indices.packed_accessor<int64_t, 2>();
+  auto output_indices_accessor = output_indices.packed_accessor64<int64_t, 2>();
 
   auto csr_output_pointers_accessor =
-      csr_output.csr_pointers_.packed_accessor<int, 1>();
+      csr_output.csr_pointers_.packed_accessor64<int, 1>();
 
   auto csr_output_ind_accessor =
-      csr_output.csr_indices_.packed_accessor<int, 1>();
+      csr_output.csr_indices_.packed_accessor64<int, 1>();
 
   auto major_dim = result.size(0);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -811,5 +822,4 @@ Tensor sparse_sparse_matmul_cuda(const Tensor& mat1_, const Tensor& mat2_) {
   return output;
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native

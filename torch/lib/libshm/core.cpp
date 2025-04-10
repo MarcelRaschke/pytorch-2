@@ -2,6 +2,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <c10/util/error.h>
 
 #include <libshm/err.h>
 #include <libshm/libshm.h>
@@ -11,7 +12,7 @@ std::unordered_map<std::string, ClientSocket> managers;
 std::string manager_executable_path;
 
 AllocInfo get_alloc_info(const char* filename) {
-  AllocInfo info = {0};
+  AllocInfo info = {};
   info.pid = getpid();
   info.free = false;
   size_t len = strlen(filename);
@@ -36,9 +37,10 @@ void start_manager() {
     execl(manager_executable_path.c_str(), "torch_shm_manager", NULL);
 
     std::string msg("ERROR: execl failed: ");
-    msg += std::strerror(errno);
+    msg += c10::utils::str_error(errno);
     msg += '\n';
-    write(1, msg.c_str(), msg.size());
+    auto res = write(1, msg.c_str(), msg.size());
+    (void)res;
 
     exit(1);
   }
@@ -102,7 +104,7 @@ THManagedMapAllocatorInit::THManagedMapAllocatorInit(
     if (!manager_handle_.empty()) {
       socket = &get_manager_socket(manager_handle_);
     } else {
-      if (managers.size() == 0) {
+      if (managers.empty()) {
         start_manager();
       }
       const auto& manager = managers.begin();
@@ -120,7 +122,7 @@ THManagedMapAllocator::THManagedMapAllocator(
     const char* manager_handle,
     const char* filename,
     int flags,
-    ptrdiff_t size)
+    size_t size)
     : THManagedMapAllocatorInit(manager_handle, filename),
       at::RefcountedMapAllocator(filename, flags, size) {}
 
@@ -142,7 +144,7 @@ at::DataPtr THManagedMapAllocator::makeDataPtr(
     const char* manager_handle,
     const char* filename,
     int flags,
-    ptrdiff_t size) {
+    size_t size) {
   auto* context =
       new THManagedMapAllocator(manager_handle, filename, flags, size);
   return {

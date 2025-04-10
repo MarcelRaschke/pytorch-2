@@ -16,71 +16,6 @@ endforeach()
 set(${OUTPUT} ${OUT} PARENT_SCOPE)
 endfunction(prepend)
 
-
-################################################################################################
-# Clears variables from list
-# Usage:
-#   caffe_clear_vars(<variables_list>)
-macro(caffe_clear_vars)
-  foreach(_var ${ARGN})
-    unset(${_var})
-  endforeach()
-endmacro()
-
-################################################################################################
-# Prints list element per line
-# Usage:
-#   caffe_print_list(<list>)
-function(caffe_print_list)
-  foreach(e ${ARGN})
-    message(STATUS ${e})
-  endforeach()
-endfunction()
-
-################################################################################################
-# Reads set of version defines from the header file
-# Usage:
-#   caffe_parse_header(<file> <define1> <define2> <define3> ..)
-macro(caffe_parse_header FILENAME FILE_VAR)
-  set(vars_regex "")
-  set(__parnet_scope OFF)
-  set(__add_cache OFF)
-  foreach(name ${ARGN})
-    if("${name}" STREQUAL "PARENT_SCOPE")
-      set(__parnet_scope ON)
-    elseif("${name}" STREQUAL "CACHE")
-      set(__add_cache ON)
-    elseif(vars_regex)
-      set(vars_regex "${vars_regex}|${name}")
-    else()
-      set(vars_regex "${name}")
-    endif()
-  endforeach()
-  if(EXISTS "${FILENAME}")
-    file(STRINGS "${FILENAME}" ${FILE_VAR} REGEX "#define[ \t]+(${vars_regex})[ \t]+[0-9]+" )
-  else()
-    unset(${FILE_VAR})
-  endif()
-  foreach(name ${ARGN})
-    if(NOT "${name}" STREQUAL "PARENT_SCOPE" AND NOT "${name}" STREQUAL "CACHE")
-      if(${FILE_VAR})
-        if(${FILE_VAR} MATCHES ".+[ \t]${name}[ \t]+([0-9]+).*")
-          string(REGEX REPLACE ".+[ \t]${name}[ \t]+([0-9]+).*" "\\1" ${name} "${${FILE_VAR}}")
-        else()
-          set(${name} "")
-        endif()
-        if(__add_cache)
-          set(${name} ${${name}} CACHE INTERNAL "${name} parsed from ${FILENAME}" FORCE)
-        elseif(__parnet_scope)
-          set(${name} "${${name}}" PARENT_SCOPE)
-        endif()
-      else()
-        unset(${name} CACHE)
-      endif()
-    endif()
-  endforeach()
-endmacro()
-
 ################################################################################################
 # Parses a version string that might have values beyond major, minor, and patch
 # and set version variables for the library.
@@ -101,7 +36,7 @@ endfunction()
 # setting to `python -c`, or using with pycmd. This allows multiline code to be
 # nested nicely in the surrounding code structure.
 #
-# This function respsects PYTHON_EXECUTABLE if it defined, otherwise it uses
+# This function respsects Python_EXECUTABLE if it defined, otherwise it uses
 # `python` and hopes for the best. An error will be thrown if it is not found.
 #
 # Args:
@@ -109,11 +44,11 @@ endfunction()
 #     text   : text to remove indentation from
 #
 function(dedent outvar text)
-  # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if("${PYTHON_EXECUTABLE}" STREQUAL "")
-    set(_python_exe "python")
+  # Use Python_EXECUTABLE if it is defined, otherwise default to python
+  if("${Python_EXECUTABLE}" STREQUAL "")
+    set(_python_exe "python3")
   else()
-    set(_python_exe "${PYTHON_EXECUTABLE}")
+    set(_python_exe "${Python_EXECUTABLE}")
   endif()
   set(_fixup_cmd "import sys; from textwrap import dedent; print(dedent(sys.stdin.read()))")
   file(WRITE "${CMAKE_BINARY_DIR}/indented.txt" "${text}")
@@ -134,11 +69,11 @@ endfunction()
 
 
 function(pycmd_no_exit outvar exitcode cmd)
-  # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if("${PYTHON_EXECUTABLE}" STREQUAL "")
+  # Use Python_EXECUTABLE if it is defined, otherwise default to python
+  if("${Python_EXECUTABLE}" STREQUAL "")
     set(_python_exe "python")
   else()
-    set(_python_exe "${PYTHON_EXECUTABLE}")
+    set(_python_exe "${Python_EXECUTABLE}")
   endif()
   # run the actual command
   execute_process(
@@ -159,7 +94,7 @@ endfunction()
 # Common indentation in the text of `cmd` is removed before the command is
 # executed, so the caller does not need to worry about indentation issues.
 #
-# This function respsects PYTHON_EXECUTABLE if it defined, otherwise it uses
+# This function respsects Python_EXECUTABLE if it defined, otherwise it uses
 # `python` and hopes for the best. An error will be thrown if it is not found.
 #
 # Args:
@@ -317,9 +252,6 @@ function(caffe2_binary_target target_name_or_src)
   if(DEFINED Caffe2_MODULES)
     target_link_libraries(${__target} ${Caffe2_MODULES})
   endif()
-  if(USE_TBB AND NOT USE_SYSTEM_TBB)
-    target_include_directories(${__target} PUBLIC ${TBB_INCLUDE_DIR})
-  endif()
   install(TARGETS ${__target} DESTINATION bin)
 endfunction()
 
@@ -375,13 +307,24 @@ macro(torch_hip_get_arch_list store_var)
 endmacro()
 
 ##############################################################################
+# Get the XPU arch flags specified by TORCH_XPU_ARCH_LIST.
+# Usage:
+#   torch_xpu_get_arch_list(variable_to_store_flags)
+#
+macro(torch_xpu_get_arch_list store_var)
+  if(DEFINED ENV{TORCH_XPU_ARCH_LIST})
+    set(${store_var} $ENV{TORCH_XPU_ARCH_LIST})
+  endif()
+endmacro()
+
+##############################################################################
 # Get the NVCC arch flags specified by TORCH_CUDA_ARCH_LIST and CUDA_ARCH_NAME.
 # Usage:
 #   torch_cuda_get_nvcc_gencode_flag(variable_to_store_flags)
 #
 macro(torch_cuda_get_nvcc_gencode_flag store_var)
   # setting nvcc arch flags
-  if((NOT EXISTS ${TORCH_CUDA_ARCH_LIST}) AND (DEFINED ENV{TORCH_CUDA_ARCH_LIST}))
+  if((NOT DEFINED TORCH_CUDA_ARCH_LIST) AND (DEFINED ENV{TORCH_CUDA_ARCH_LIST}))
     message(WARNING
         "In the future we will require one to explicitly pass "
         "TORCH_CUDA_ARCH_LIST to cmake instead of implicitly setting it as an "
@@ -389,7 +332,7 @@ macro(torch_cuda_get_nvcc_gencode_flag store_var)
         "pytorch.")
     set(TORCH_CUDA_ARCH_LIST $ENV{TORCH_CUDA_ARCH_LIST})
   endif()
-  if(EXISTS ${CUDA_ARCH_NAME})
+  if(DEFINED CUDA_ARCH_NAME)
     message(WARNING
         "CUDA_ARCH_NAME is no longer used. Use TORCH_CUDA_ARCH_LIST instead. "
         "Right now, CUDA_ARCH_NAME is ${CUDA_ARCH_NAME} and "
@@ -407,96 +350,90 @@ endmacro()
 # Usage:
 #   torch_compile_options(lib_name)
 function(torch_compile_options libname)
-  set_property(TARGET ${libname} PROPERTY CXX_STANDARD 14)
-  set(private_compile_options "")
+  set_property(TARGET ${libname} PROPERTY CXX_STANDARD 17)
 
-  # ---[ Check if warnings should be errors.
-  if(WERROR)
-    list(APPEND private_compile_options -Werror)
-  endif()
+  # until they can be unified, keep these lists synced with setup.py
+  if(MSVC)
 
-  if(NOT INTERN_BUILD_MOBILE OR NOT BUILD_CAFFE2_MOBILE)
-    # until they can be unified, keep these lists synced with setup.py
-    if(MSVC)
+    if(MSVC_Z7_OVERRIDE)
+      set(MSVC_DEBINFO_OPTION "/Z7")
+    else()
+      set(MSVC_DEBINFO_OPTION "/Zi")
+    endif()
 
-      if(MSVC_Z7_OVERRIDE)
-        set(MSVC_DEBINFO_OPTION "/Z7")
-      else()
-        set(MSVC_DEBINFO_OPTION "/Zi")
-      endif()
+    if(${MSVC_TOOLSET_VERSION} GREATER_EQUAL 142)
+      # Add /permissive- flag for conformance mode to the compiler.
+      # This will force more strict check to the code standard.
+      # 1. From MS official doc: https://learn.microsoft.com/en-us/cpp/build/reference/permissive-standards-conformance?view=msvc-170#remarks
+      #    By default, the /permissive- option is set in new projects created by Visual Studio 2017 version 15.5 and later versions.
+      #    We set the /permissive- flag from VS 2019 (MSVC_TOOLSET_VERSION 142) to avoid compiling issues for old toolkit.
+      # 2. For MSVC VERSION: https://cmake.org/cmake/help/latest/variable/MSVC_TOOLSET_VERSION.html
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /permissive-" PARENT_SCOPE)
+    endif()
 
-      target_compile_options(${libname} PUBLIC
-        $<$<COMPILE_LANGUAGE:CXX>:
-          ${MSVC_RUNTIME_LIBRARY_OPTION}
-          $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:${MSVC_DEBINFO_OPTION}>
-          /EHsc
-          /DNOMINMAX
-          /wd4267
-          /wd4251
-          /wd4522
-          /wd4522
-          /wd4838
-          /wd4305
-          /wd4244
-          /wd4190
-          /wd4101
-          /wd4996
-          /wd4275
-          /bigobj>
-        )
+    target_compile_options(${libname} PUBLIC
+      $<$<COMPILE_LANGUAGE:CXX>:
+        ${MSVC_RUNTIME_LIBRARY_OPTION}
+        $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:${MSVC_DEBINFO_OPTION}>
+        /EHsc
+        /bigobj>
+      )
+  else()
+    set(private_compile_options
+      -Wall
+      -Wextra
+      -Wdeprecated
+      -Wno-unused-parameter
+      -Wno-missing-field-initializers
+      -Wno-array-bounds
+      -Wno-unknown-pragmas
+      -Wno-strict-overflow
+      -Wno-strict-aliasing
+      )
+    list(APPEND private_compile_options -Wunused-function)
+    list(APPEND private_compile_options -Wunused-variable)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      list(APPEND private_compile_options -Wunused-but-set-variable -Wredundant-move)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      list(APPEND private_compile_options -Wunused-private-field -Wextra-semi -Wno-error=extra-semi -Wmove)
     else()
       list(APPEND private_compile_options
-        -Wall
-        -Wextra
-        -Wno-unused-parameter
-        -Wno-unused-variable
-        -Wno-unused-function
-        -Wno-unused-result
-        -Wno-unused-local-typedefs
-        -Wno-missing-field-initializers
-        -Wno-write-strings
-        -Wno-unknown-pragmas
-        -Wno-type-limits
-        -Wno-array-bounds
-        -Wno-unknown-pragmas
-        -Wno-sign-compare
-        -Wno-strict-overflow
-        -Wno-strict-aliasing
-        -Wno-error=deprecated-declarations
-        # Clang has an unfixed bug leading to spurious missing braces
-        # warnings, see https://bugs.llvm.org/show_bug.cgi?id=21629
-        -Wno-missing-braces
-        )
-      if("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
-        list(APPEND private_compile_options
-          -Wno-range-loop-analysis)
-      endif()
-      if(NOT APPLE)
-        list(APPEND private_compile_options
-          # Considered to be flaky.  See the discussion at
-          # https://github.com/pytorch/pytorch/pull/9608
-          -Wno-maybe-uninitialized)
-      endif()
-
+        # Considered to be flaky.  See the discussion at
+        # https://github.com/pytorch/pytorch/pull/9608
+        -Wno-maybe-uninitialized)
     endif()
 
-    if(MSVC)
-    elseif(WERROR)
-      list(APPEND private_compile_options -Wno-strict-overflow)
+    if(WERROR)
+      list(APPEND private_compile_options
+        -Werror
+        -Werror=inconsistent-missing-override
+        -Werror=inconsistent-missing-destructor-override
+        -Werror=unused-function
+        -Werror=unused-variable
+        -Werror=pedantic
+      )
+      if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        list(APPEND private_compile_options -Werror=unused-but-set-variable)
+      endif()
     endif()
   endif()
+
 
   target_compile_options(${libname} PRIVATE
       $<$<COMPILE_LANGUAGE:CXX>:${private_compile_options}>)
   if(USE_CUDA)
-    string(FIND "${private_compile_options}" " " space_position)
-    if(NOT space_position EQUAL -1)
-      message(FATAL_ERROR "Found spaces in private_compile_options='${private_compile_options}'")
-    endif()
-    # Convert CMake list to comma-separated list
-    string(REPLACE ";" "," private_compile_options "${private_compile_options}")
-    target_compile_options(${libname} PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${private_compile_options}>)
+    foreach(option IN LISTS private_compile_options)
+      if(CMAKE_CUDA_HOST_COMPILER_ID STREQUAL "GNU")
+        if("${option}" STREQUAL "-Wextra-semi")
+          continue()
+        endif()
+        if("${option}" STREQUAL "-Wunused-private-field")
+          continue()
+        endif()
+      endif()
+      target_compile_options(${libname} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler ${option}>)
+    endforeach()
   endif()
 
   if(NOT WIN32 AND NOT USE_ASAN)
@@ -516,26 +453,6 @@ function(torch_compile_options libname)
       $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:-O2>)
 
 endfunction()
-
-
-##############################################################################
-# Set standard target properties.
-# Usage:
-#   torch_set_target_props(lib_name)
-function(torch_set_target_props libname)
-  if(MSVC AND AT_MKL_MT)
-    set(VCOMP_LIB "vcomp")
-    set_target_properties(${libname} PROPERTIES LINK_FLAGS_MINSIZEREL "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(${libname} PROPERTIES LINK_FLAGS_RELWITHDEBINFO "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(${libname} PROPERTIES LINK_FLAGS_RELEASE "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(${libname} PROPERTIES LINK_FLAGS_DEBUG "/NODEFAULTLIB:${VCOMP_LIB}d")
-    set_target_properties(${libname} PROPERTIES STATIC_LIBRARY_FLAGS_MINSIZEREL "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(${libname} PROPERTIES STATIC_LIBRARY_FLAGS_RELWITHDEBINFO "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(${libname} PROPERTIES STATIC_LIBRARY_FLAGS_RELEASE "/NODEFAULTLIB:${VCOMP_LIB}")
-    set_target_properties(${libname} PROPERTIES STATIC_LIBRARY_FLAGS_DEBUG "/NODEFAULTLIB:${VCOMP_LIB}d")
-  endif()
-endfunction()
-
 
 ##############################################################################
 # Set old-style FindCuda.cmake compile flags from modern CMake cuda flags.
@@ -570,5 +487,36 @@ function(torch_update_find_cuda_flags)
                     "    CUDA_NVCC_FLAGS_RELEASE        = ${FLAGS_RELEASE}\n"
                     "    CUDA_NVCC_FLAGS_RELWITHDEBINFO = ${FLAGS_RELWITHDEBINFO}\n"
                     "    CUDA_NVCC_FLAGS_MINSIZEREL     = ${FLAGS_MINSIZEREL}")
+  endif()
+endfunction()
+
+include(CheckCXXCompilerFlag)
+
+##############################################################################
+# CHeck if given flag is supported and append it to provided outputvar
+# Also define HAS_UPPER_CASE_FLAG_NAME variable
+# Usage:
+#   append_cxx_flag_if_supported("-Werror" CMAKE_CXX_FLAGS)
+function(append_cxx_flag_if_supported flag outputvar)
+    string(TOUPPER "HAS${flag}" _FLAG_NAME)
+    string(REGEX REPLACE "[=-]" "_" _FLAG_NAME "${_FLAG_NAME}")
+    # GCC silents unknown -Wno-XXX flags, so we detect the corresponding -WXXX.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      string(REGEX REPLACE "Wno-" "W" new_flag "${flag}")
+    else()
+      set(new_flag ${flag})
+    endif()
+    check_cxx_compiler_flag("${new_flag}" ${_FLAG_NAME})
+    if(${_FLAG_NAME})
+        string(APPEND ${outputvar} " ${flag}")
+        set(${outputvar} "${${outputvar}}" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(target_compile_options_if_supported target flag)
+  set(_compile_options "")
+  append_cxx_flag_if_supported("${flag}" _compile_options)
+  if(NOT "${_compile_options}" STREQUAL "")
+    target_compile_options(${target} PRIVATE ${flag})
   endif()
 endfunction()

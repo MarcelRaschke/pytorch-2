@@ -4,10 +4,10 @@
 #include <torch/csrc/jit/frontend/ir_emitter.h>
 #include <torch/csrc/jit/ir/alias_analysis.h>
 #include <torch/csrc/jit/ir/irparser.h>
+#include <torch/csrc/jit/ir/type_hashing.h>
 #include <torch/csrc/jit/passes/utils/subgraph_utils.h>
 #include <torch/csrc/jit/runtime/custom_operator.h>
 #include <torch/csrc/jit/runtime/graph_iterator.h>
-#include <torch/csrc/utils/memory.h>
 
 #include <ATen/TensorOperators.h>
 
@@ -23,7 +23,7 @@ class TopologicalMoveTest : public ::testing::Test {
  protected:
   TopologicalMoveTest() {
     createGraph();
-    aliasDb = torch::make_unique<AliasDb>(graph);
+    aliasDb = std::make_unique<AliasDb>(graph);
   }
 
   // Nodes are named after their output.
@@ -298,7 +298,8 @@ inline void expectThrows(Functor&& functor, const char* expectMessageContains) {
   } catch (const Exception& e) {
     if (std::string(e.what()).find(expectMessageContains) ==
         std::string::npos) {
-      AT_ERROR(
+      TORCH_CHECK(
+          false,
           "Expected error message to contain \"",
           expectMessageContains,
           "\" but error message was: ",
@@ -306,7 +307,8 @@ inline void expectThrows(Functor&& functor, const char* expectMessageContains) {
     }
     return;
   }
-  AT_ERROR(
+  TORCH_CHECK(
+      false,
       "Expected to throw exception containing \"",
       expectMessageContains,
       "\" but didn't throw");
@@ -1303,7 +1305,7 @@ TEST(AliasRegistrationTest, ConservativeWithAliasingAnnotationsShouldError) {
   // registration.
   expectThrows<c10::Error>(
       [&graph] { AliasDb aliasDb(graph); },
-      "Tried to register operator foo::rand3(Tensor(a) arg1) -> (Tensor(b)) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
+      "Tried to register operator foo::rand3(Tensor(a) arg1) -> Tensor(b) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
 }
 
 TEST(AliasRegistrationTest, ConservativeWithAliasingAnnotationsShouldError2) {
@@ -1323,7 +1325,7 @@ TEST(AliasRegistrationTest, ConservativeWithAliasingAnnotationsShouldError2) {
   // registration.
   expectThrows<c10::Error>(
       [&graph] { AliasDb aliasDb(graph); },
-      "Tried to register operator foo::rand4(Tensor(a) arg1) -> (Tensor(a)) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
+      "Tried to register operator foo::rand4(Tensor(a) arg1) -> Tensor(a) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
 }
 
 TEST(AliasRegistrationTest, FromSchemaWithInferredSchemaShouldError) {
@@ -1337,7 +1339,7 @@ TEST(AliasRegistrationTest, FromSchemaWithInferredSchemaShouldError) {
                 })
                 .aliasAnalysis(AliasAnalysisKind::FROM_SCHEMA));
       },
-      "Tried to register operator foo::rand5(Tensor _0) -> (Tensor _0) with AliasAnalysisKind::FROM_SCHEMA, but the schema is inferred");
+      "Tried to register operator foo::rand5(Tensor _0) -> Tensor _0 with AliasAnalysisKind::FROM_SCHEMA, but the schema is inferred");
 }
 
 TEST(AliasRegistrationTest, FromSchemaInferredPure) {
@@ -1438,7 +1440,7 @@ TEST(AliasRegistrationTest, PureWithAnnotationsShouldError) {
   // registration.
   expectThrows<c10::Error>(
       [&graph] { AliasDb aliasDb(graph); },
-      "Tried to register operator foo::rand11(Tensor(a) arg1) -> (Tensor(a)) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
+      "Tried to register operator foo::rand11(Tensor(a) arg1) -> Tensor(a) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
 }
 
 TEST(AliasRegistrationTest, AliasMoveAtenListOp) {
@@ -1605,7 +1607,104 @@ TEST(AliasRegistrationTest, PureWithAnnotationsShouldError2) {
   // registration.
   expectThrows<c10::Error>(
       [&graph] { AliasDb aliasDb(graph); },
-      "Tried to register operator foo::rand12(Tensor(a) arg1) -> (Tensor(b)) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
+      "Tried to register operator foo::rand12(Tensor(a) arg1) -> Tensor(b) with aliasing information in the schema but without AliasAnalysisKind::FROM_SCHEMA");
 }
+
+TEST(IRNonDeterminismTest, Basic) {
+  auto graph = std::make_shared<Graph>();
+  auto graph_string = R"IR(
+  graph():
+    %x : Tensor = prim::MakeTestTensor()
+    %0 : int = prim::Constant[value=0]()
+    %1 : NoneType = prim::Constant()
+    %2 : Tensor = aten::bernoulli(%x, %1)
+    %3 : Tensor = aten::add(%x, %2, %0)
+    return (%3))IR";
+  parseIR(graph_string, graph.get());
+
+  for (Node* n : graph->nodes()) {
+    if (n->kind() == aten::bernoulli) {
+      ASSERT_TRUE(n->isNondeterministic());
+    } else {
+      ASSERT_FALSE(n->isNondeterministic());
+    }
+  }
+}
+
+TEST(IRNonDeterminismTest, DropoutSpecialCase) {
+  auto graph = std::make_shared<Graph>();
+  auto graph_string = R"IR(
+  graph():
+    %x : Tensor = prim::MakeTestTensor()
+    %0 : bool = prim::Constant[value=0]()
+    %1 : bool = prim::Constant[value=1]()
+    %3 : int = prim::Constant[value=1]()
+    %3 : float = prim::Constant[value=1.0]()
+    %4 : Tensor = aten::dropout(%x, %3, %0)
+    %5 : Tensor = aten::dropout(%x, %3, %1)
+    %6 : Tensor = aten::add(%4, %5, %3)
+    return (%6))IR";
+  parseIR(graph_string, graph.get());
+
+  bool train = false;
+  for (Node* n : graph->nodes()) {
+    if (n->kind() == aten::dropout) {
+      if (!train) {
+        ASSERT_FALSE(n->isNondeterministic());
+        train = true;
+      } else {
+        ASSERT_TRUE(n->isNondeterministic());
+      }
+    } else {
+      ASSERT_FALSE(n->isNondeterministic());
+    }
+  }
+}
+
+TEST(NonDeterminismBackwardsCompatibility, BackwardsCompatibility) {
+  static const std::vector<std::string> nondeterministic_ops = {
+      "aten::dropout(Tensor input, float p, bool train) -> Tensor",
+      "aten::_fused_dropout(Tensor self, float p, Generator? generator) -> (Tensor, Tensor)",
+      "aten::_standard_gamma(Tensor self, Generator? generator) -> Tensor",
+      "aten::bernoulli(Tensor self, *, Generator? generator) -> Tensor",
+      "aten::bernoulli(Tensor self, float p, *, Generator? generator) -> Tensor",
+      "aten::multinomial(Tensor self, int num_samples, bool replacement, *, Generator? generator) -> Tensor",
+      "aten::native_dropout(Tensor input, float p, bool? train) -> (Tensor, Tensor)",
+      "aten::normal.Tensor_Tensor(Tensor mean, Tensor std, *, Generator? generator) -> Tensor",
+      "aten::normal.float_Tensor(float mean, Tensor std, *, Generator? generator) -> Tensor",
+      "aten::normal.Tensor_float(Tensor mean, float std, *, Generator? generator) -> Tensor",
+      "aten::poisson(Tensor self, Generator? generator) -> Tensor",
+      "aten::binomial(Tensor count, Tensor prob, Generator? generator=None) -> Tensor",
+      "aten::rrelu(Tensor self, Scalar lower, Scalar upper, bool training, Generator? generator) -> Tensor",
+      "aten::rrelu_with_noise(Tensor self, Tensor noise, Scalar lower, Scalar upper, bool training, Generator? generator) -> Tensor",
+      "aten::rand(int[] size, *, int? dtype, int? layout, Device? device, bool? pin_memory) -> Tensor",
+      "aten::rand_like(Tensor self, *, int? dtype=None, int? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor",
+      "aten::randint(int high, int[] size, *, int? dtype, int? layout, Device? device, bool? pin_memory) -> Tensor",
+      "aten::randint(int low, int high, int[] size, *, int? dtype, int? layout, Device? device, bool? pin_memory) -> Tensor",
+      "aten::randint_like(Tensor self, int high, *, int? dtype=None, int? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor",
+      "aten::randint_like(Tensor self, int low, int high, *, int? dtype=None, int? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor",
+      "aten::randn(int[] size, *, int? dtype, int? layout, Device? device, bool? pin_memory) -> Tensor",
+      "aten::randn_like(Tensor self, *, int? dtype=None, int? layout=None, Device? device=None, bool? pin_memory=None, MemoryFormat? memory_format=None) -> Tensor",
+      "aten::randperm(int n, *, int? dtype, int? layout, Device? device, bool? pin_memory) -> Tensor"};
+  for (const std::string& op : nondeterministic_ops) {
+    const c10::FunctionSchema& schema = torch::jit::parseSchema(op);
+    const auto& op_handle = c10::Dispatcher::singleton().findOp(
+        c10::OperatorName(schema.name(), schema.overload_name()));
+    ASSERT_TRUE(op_handle->hasTag(at::Tag::nondeterministic_seeded));
+  }
+}
+
+TEST(TypeHashing, HashTypes) {
+  HashType hasher;
+
+  const TypePtr int_type = IntType::get();
+  const TypePtr float_type = FloatType::get();
+  ASSERT_NE(hasher(int_type), hasher(float_type));
+
+  const TypePtr int2_type = TupleType::create({int_type, int_type});
+  const TypePtr int3_type = TupleType::create({int_type, int_type, int_type});
+  ASSERT_NE(hasher(int2_type), hasher(int3_type));
+}
+
 } // namespace jit
 } // namespace torch

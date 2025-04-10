@@ -3,10 +3,7 @@
 #include <torch/csrc/jit/backends/backend.h>
 #include <torch/csrc/jit/mobile/nnc/context.h>
 
-namespace torch {
-namespace jit {
-namespace mobile {
-namespace nnc {
+namespace torch::jit::mobile::nnc {
 
 class NNCBackend : public PyTorchBackendInterface {
  public:
@@ -51,10 +48,8 @@ class NNCBackend : public PyTorchBackendInterface {
 };
 
 namespace {
-static const auto cls = torch::jit::backend<NNCBackend>("nnc");
+// TODO(mvz): temporarily disable NNC backend in mobile builds.
+// static const auto cls = torch::jit::backend<NNCBackend>("nnc");
 } // namespace
 
-} // namespace nnc
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::mobile::nnc

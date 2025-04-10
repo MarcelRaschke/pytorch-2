@@ -284,7 +284,7 @@ graph(%a : Float(4, 5),
   auto a_sizes = *a_type->sizes().concrete_sizes();
   auto a_strides = a_type->strides().concrete_sizes();
   AT_ASSERT(a_sizes[0] == 4 && a_sizes[1] == 5);
-  AT_ASSERT(a_strides == c10::nullopt);
+  AT_ASSERT(a_strides == std::nullopt);
 
   auto b_type = b->type()->cast<TensorType>();
   auto b_sizes = *b_type->sizes().concrete_sizes();
@@ -294,14 +294,13 @@ graph(%a : Float(4, 5),
 
   auto c_type = c->type()->cast<TensorType>();
   AT_ASSERT(*c_type->sizes().size() == 2);
-  AT_ASSERT(c_type->sizes().concrete_sizes() == c10::nullopt);
-  AT_ASSERT(c_type->strides().concrete_sizes() == c10::nullopt);
+  AT_ASSERT(c_type->sizes().concrete_sizes() == std::nullopt);
+  AT_ASSERT(c_type->strides().concrete_sizes() == std::nullopt);
 }
 
 TEST(IRParserTest, MalformedStrides) {
   auto graph = std::make_shared<Graph>();
   std::unordered_map<std::string, Value*> vmap;
-  bool error_thrown = false;
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-goto,hicpp-avoid-goto)
   EXPECT_ANY_THROW(parseIR(
       R"IR(

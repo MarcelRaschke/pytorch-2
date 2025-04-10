@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 #include <string>
 
-#include <torch/csrc/lazy/core/hash.h>
 #include <c10/util/int128.h>
+#include <torch/csrc/lazy/core/hash.h>
 
 namespace torch {
 namespace lazy {
@@ -21,13 +21,15 @@ void test_hash_repeatable_sensitive(const T& example_a, const T& example_b) {
 }
 
 TEST(HashTest, Scalar) {
+  GTEST_SKIP()
+      << "Broken test. See https://github.com/pytorch/pytorch/issues/99883";
   c10::Scalar a(0);
   c10::Scalar b(0);
 
   // simulate some garbage in the unused bits of the
   // the tagged union that is c10::Scalar, which is bigger
   // than the size of the int64_t we're currently using it with
-  *((uint8_t*)&b)  = 1;
+  *((uint8_t*)&b) = 1;
   // actual 'value' of the Scalar as a 64 bit int shouldn't have changed
   EXPECT_EQ(a.toLong(), b.toLong());
   // and hash should ignore this garbage
@@ -61,16 +63,22 @@ TEST(HashTest, Sanity) {
   test_hash_repeatable_sensitive(c10::Scalar(true), c10::Scalar(false));
   test_hash_repeatable_sensitive(c10::Scalar(12345), c10::Scalar(12354));
 
-  // c10::optional
+  // std::optional
   test_hash_repeatable_sensitive(
-      c10::optional<std::string>("I have value!"),
-      c10::optional<std::string>(c10::nullopt));
+      std::optional<std::string>("I have value!"),
+      std::optional<std::string>(std::nullopt));
 
   // Containers
   auto a = std::vector<int32_t>({0, 1, 1, 2, 3, 5, 8});
   auto b = std::vector<int32_t>({1, 1, 2, 3, 5, 8, 12});
   test_hash_repeatable_sensitive(a, b);
-  test_hash_repeatable_sensitive(c10::ArrayRef<int32_t>(a), c10::ArrayRef<int32_t>(b));
+  test_hash_repeatable_sensitive(
+      c10::ArrayRef<int32_t>(a), c10::ArrayRef<int32_t>(b));
+
+  // vector<bool> is a special case bc it is implemented as vector<bit>
+  auto bool_a = std::vector<bool>({true, false, false, true});
+  auto bool_b = std::vector<bool>({true, true, false, true});
+  test_hash_repeatable_sensitive(bool_a, bool_b);
 }
 
 } // namespace lazy

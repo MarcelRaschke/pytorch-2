@@ -1,9 +1,9 @@
+#include <array>
 #include <gtest/gtest.h>
 #include <ATen/ATen.h>
 #include <ATen/native/cuda/Loops.cuh>
 #include <ATen/native/cuda/MemoryAccess.cuh>
 #include <ATen/cuda/CUDAContext.h>
-#include <ATen/core/Array.h>
 
 using namespace at::native;
 using namespace at::native::memory;
@@ -47,11 +47,11 @@ TEST(TestLoops, HasSameArgTypes) {
 TEST(TestVectorizedMemoryAccess, CanVectorizeUpTo) {
   char *ptr = reinterpret_cast<char *>(buffer1);
 
-  ASSERT_EQ(memory::can_vectorize_up_to<bool>(ptr), 4);
-  ASSERT_EQ(memory::can_vectorize_up_to<int8_t>(ptr), 4);
-  ASSERT_EQ(memory::can_vectorize_up_to<int16_t>(ptr), 4);
-  ASSERT_EQ(memory::can_vectorize_up_to<int>(ptr), 4);
-  ASSERT_EQ(memory::can_vectorize_up_to<int64_t>(ptr), 4);
+  ASSERT_EQ(memory::can_vectorize_up_to<bool>(ptr), 8);
+  ASSERT_EQ(memory::can_vectorize_up_to<int8_t>(ptr), 8);
+  ASSERT_EQ(memory::can_vectorize_up_to<int16_t>(ptr), 8);
+  ASSERT_EQ(memory::can_vectorize_up_to<int>(ptr), 8);
+  ASSERT_EQ(memory::can_vectorize_up_to<int64_t>(ptr), 8);
 
   ASSERT_EQ(memory::can_vectorize_up_to<bool>(ptr + 1), 1);
   ASSERT_EQ(memory::can_vectorize_up_to<int8_t>(ptr + 1), 1);
@@ -65,8 +65,8 @@ TEST(TestVectorizedMemoryAccess, CanVectorizeUpTo) {
   ASSERT_EQ(memory::can_vectorize_up_to<int16_t>(ptr + 4), 2);
   ASSERT_EQ(memory::can_vectorize_up_to<int>(ptr + 4), 1);
 
-  ASSERT_EQ(memory::can_vectorize_up_to<bool>(ptr + 8), 4);
-  ASSERT_EQ(memory::can_vectorize_up_to<int8_t>(ptr + 8), 4);
+  ASSERT_EQ(memory::can_vectorize_up_to<bool>(ptr + 8), 8);
+  ASSERT_EQ(memory::can_vectorize_up_to<int8_t>(ptr + 8), 8);
   ASSERT_EQ(memory::can_vectorize_up_to<int16_t>(ptr + 8), 4);
   ASSERT_EQ(memory::can_vectorize_up_to<int>(ptr + 8), 2);
   ASSERT_EQ(memory::can_vectorize_up_to<int64_t>(ptr + 8), 1);
@@ -77,15 +77,15 @@ TEST(TestVectorizedMemoryAccess, CanVectorizeUpTo) {
 template <typename scalar_t, int vec_size>
 __global__ void vectorized_copy(scalar_t *dst, scalar_t *src) {
   static_assert(vec_size <= thread_work_size() && thread_work_size() % vec_size == 0, "Invalid vec_size");
-  using array_t = at::detail::Array<char*, 2>;
+  using array_t = std::array<char*, 2>;
   array_t data;
   data[0] = reinterpret_cast<char *>(dst);
   data[1] = reinterpret_cast<char *>(src);
   int idx = blockIdx.x;
-  using vectorized = policies::vectorized<vec_size, array_t>;
+  using vectorized = policies::vectorized<vec_size, array_t, thread_work_size()>;
   auto policy = vectorized(data);
   scalar_t buf[thread_work_size()];
-#if defined(CUDA_VERSION) && CUDA_VERSION < 11000
+#if !defined(USE_ROCM)
   // This fails only on CUDA 10.x, remove this after CUDA 10.x support is dropped
   scalar_t *buf_ = &buf[0];
   auto accessor = [&](int index) -> scalar_t & { return buf_[index]; };
@@ -154,7 +154,7 @@ TEST(TestVectorizedMemoryAccess, CopyKernel) {
     for (int j = 0; j < 16; j++) {
       b1 = reinterpret_cast<double *>(reinterpret_cast<char *>(buffer1) + i);
       b2 = reinterpret_cast<double *>(reinterpret_cast<char *>(buffer2) + j);
-      cudaGetLastError();
+      (void)cudaGetLastError();
       cudaDeviceSynchronize();
       vectorized_copy<double, 4><<<1, num_threads()>>>(b2, b1);
       cudaDeviceSynchronize();

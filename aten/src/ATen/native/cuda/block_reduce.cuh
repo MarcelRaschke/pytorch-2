@@ -5,9 +5,7 @@
 #include <ATen/native/SharedReduceOps.h>
 #include <ATen/cuda/DeviceUtils.cuh>
 
-namespace at {
-namespace native {
-namespace cuda_utils {
+namespace at::native::cuda_utils {
 
 constexpr int kCUDABlockReduceNumThreads = 512;
 // Algorithmic limitation: BlockReduce does two WarpReduce calls, each
@@ -16,7 +14,7 @@ constexpr int kCUDABlockReduceNumThreads = 512;
 // NOTE: This is >= the max block size on current hardware anyway (1024).
 constexpr int kCUDABlockReduceMaxThreads = C10_WARP_SIZE * C10_WARP_SIZE;
 
-// Sums `val` accross all threads in a warp.
+// Sums `val` across all threads in a warp.
 //
 // Assumptions:
 //   - The size of each block should be a multiple of `C10_WARP_SIZE`
@@ -29,26 +27,83 @@ __inline__ __device__ T WarpReduceSum(T val) {
   return val;
 }
 
-// Sums `val` across all threads in a block.
+// Picks the maximum `val` across all threads in a warp.
 //
 // Assumptions:
-//   - Thread blocks are an 1D set of threads (indexed with `threadIdx.x` only)
+//   - The size of each block should be a multiple of `C10_WARP_SIZE`
+template <typename T>
+__inline__ __device__ T WarpReduceMax(T val) {
+#pragma unroll
+  for (int offset = (C10_WARP_SIZE >> 1); offset > 0; offset >>= 1) {
+    val = max_propagate_nan(val, WARP_SHFL_DOWN(val, offset));
+  }
+  return val;
+}
+
+struct Block1D {
+    static __forceinline__ __device__ int Tid() { return threadIdx.x; }
+
+    static __forceinline__ __device__ int Warps() {
+        return blockDim.x / C10_WARP_SIZE;
+    }
+};
+
+struct Block2D {
+    static __forceinline__ __device__ int Tid() {
+        return threadIdx.x + threadIdx.y * blockDim.x;
+    }
+
+    static __forceinline__ __device__ int Warps() {
+        return blockDim.x * blockDim.y / C10_WARP_SIZE;
+    }
+};
+
+// Sums `val` across all threads in a block.
+//
+// Warning: the return value is only valid for thread 0.
+// Assumptions:
 //   - The size of each block should be a multiple of `C10_WARP_SIZE`
 //   - `shared` should be a pointer to shared memory with size of, at least,
 //     `sizeof(T) * number_of_warps`
-template <typename T>
+template <typename T, typename B = Block1D>
 __inline__ __device__ T BlockReduceSum(T val, T* shared) {
-  const int lid = threadIdx.x % C10_WARP_SIZE;
-  const int wid = threadIdx.x / C10_WARP_SIZE;
+  const int tid = B::Tid();
+  const int lid = tid % C10_WARP_SIZE;
+  const int wid = tid / C10_WARP_SIZE;
   val = WarpReduceSum(val);
-  __syncthreads();
+  __syncthreads(); // prevent races when BlockReduces are called in a row.
   if (lid == 0) {
     shared[wid] = val;
   }
   __syncthreads();
-  val = (threadIdx.x < blockDim.x / C10_WARP_SIZE) ? shared[lid] : T(0);
+  val = (tid < B::Warps()) ? shared[lid] : T(0);
   if (wid == 0) {
     val = WarpReduceSum(val);
+  }
+  return val;
+}
+
+// Picks out the maximum `val` across all threads in a block.
+//
+// Warning: the return value is only valid for thread 0.
+// Assumptions:
+//   - The size of each block should be a multiple of `C10_WARP_SIZE`
+//   - `shared` should be a pointer to shared memory with size of, at least,
+//     `sizeof(T) * number_of_warps`
+template <typename T, typename B = Block1D>
+__inline__ __device__ T BlockReduceMax(T val, T* shared) {
+  const int tid = B::Tid();
+  const int lid = tid % C10_WARP_SIZE;
+  const int wid = tid / C10_WARP_SIZE;
+  val = WarpReduceMax(val);
+  __syncthreads(); // prevent races when BlockReduces are called in a row.
+  if (lid == 0) {
+    shared[wid] = val;
+  }
+  __syncthreads();
+  val = (tid < B::Warps()) ? shared[lid] : T(std::numeric_limits<T>::lowest());
+  if (wid == 0) {
+    val = WarpReduceMax(val);
   }
   return val;
 }
@@ -62,25 +117,23 @@ __inline__ __device__ T WarpReduce(T val, const ReduceOp& op) {
   return val;
 }
 
-template <typename T, class ReduceOp>
+template <typename T, class ReduceOp, typename B = Block1D>
 __inline__ __device__ T
 BlockReduce(T val, const ReduceOp& op, const T& identity_element, T* shared) {
-  const int lid = threadIdx.x % C10_WARP_SIZE;
-  const int wid = threadIdx.x / C10_WARP_SIZE;
+  const int tid = B::Tid();
+  const int lid = tid % C10_WARP_SIZE;
+  const int wid = tid / C10_WARP_SIZE;
   val = WarpReduce(val, op);
-  __syncthreads();
+  __syncthreads(); // prevent races when BlockReduces are called in a row.
   if (lid == 0) {
     shared[wid] = val;
   }
   __syncthreads();
-  val = (threadIdx.x < blockDim.x / C10_WARP_SIZE) ? shared[lid]
-                                                   : identity_element;
+  val = (tid < B::Warps()) ? shared[lid] : identity_element;
   if (wid == 0) {
     val = WarpReduce(val, op);
   }
   return val;
 }
 
-} // namespace cuda_utils
-} // namespace native
-} // namespace at
+} // namespace at::native::cuda_utils

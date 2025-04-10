@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
+# mypy: allow-untyped-defs
 import sys
 import pickle
 import struct
 import pprint
 import zipfile
 import fnmatch
-from typing import Any, IO, BinaryIO, Union
+from typing import Any, IO
 
+__all__ = ["FakeObject", "FakeClass", "DumpUnpickler", "main"]
 
-class FakeObject(object):
+class FakeObject:
     def __init__(self, module, name, args):
         self.module = module
         self.name = name
@@ -39,10 +41,10 @@ class FakeObject(object):
             printer._format(obj.state, stream, indent, allowance + 1, context, level + 1)
             stream.write(")")
             return
-        raise Exception("Need to implement")
+        raise Exception("Need to implement")  # noqa: TRY002
 
 
-class FakeClass(object):
+class FakeClass:
     def __init__(self, module, name):
         self.module = module
         self.name = name
@@ -81,10 +83,10 @@ class DumpUnpickler(pickle._Unpickler):  # type: ignore[name-defined]
     # for strings that catches the decode exception and replaces it with
     # a sentinel object.
     def load_binunicode(self):
-        strlen, = struct.unpack("<I", self.read(4))
+        strlen, = struct.unpack("<I", self.read(4))  # type: ignore[attr-defined]
         if strlen > sys.maxsize:
-            raise Exception("String too long.")
-        str_bytes = self.read(strlen)
+            raise Exception("String too long.")  # noqa: TRY002
+        str_bytes = self.read(strlen)  # type: ignore[attr-defined]
         obj: Any
         try:
             obj = str(str_bytes, "utf-8", "surrogatepass")
@@ -92,8 +94,8 @@ class DumpUnpickler(pickle._Unpickler):  # type: ignore[name-defined]
             if not self.catch_invalid_utf8:
                 raise
             obj = FakeObject("builtin", "UnicodeDecodeError", (str(exn),))
-        self.append(obj)
-    dispatch[pickle.BINUNICODE[0]] = load_binunicode
+        self.append(obj)  # type: ignore[attr-defined]
+    dispatch[pickle.BINUNICODE[0]] = load_binunicode  # type: ignore[assignment]
 
     @classmethod
     def dump(cls, in_stream, out_stream):
@@ -106,7 +108,7 @@ def main(argv, output_stream=None):
     if len(argv) != 2:
         # Don't spam stderr if not using stdout.
         if output_stream is not None:
-            raise Exception("Pass argv of length 2.")
+            raise Exception("Pass argv of length 2.")  # noqa: TRY002
         sys.stderr.write("usage: show_pickle PICKLE_FILE\n")
         sys.stderr.write("  PICKLE_FILE can be any of:\n")
         sys.stderr.write("    path to a pickle file\n")
@@ -117,7 +119,7 @@ def main(argv, output_stream=None):
         return 2
 
     fname = argv[1]
-    handle: Union[IO[bytes], BinaryIO]
+    handle: IO[bytes]
     if "@" not in fname:
         with open(fname, "rb") as handle:
             DumpUnpickler.dump(handle, output_stream)
@@ -136,7 +138,7 @@ def main(argv, output_stream=None):
                         found = True
                         break
                 if not found:
-                    raise Exception(f"Could not find member matching {mname} in {zfname}")
+                    raise Exception(f"Could not find member matching {mname} in {zfname}")  # noqa: TRY002
 
 
 if __name__ == "__main__":

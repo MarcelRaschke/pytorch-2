@@ -3,13 +3,13 @@
 #include <ATen/core/symbol.h>
 #include <c10/core/ScalarType.h>
 #include <c10/util/ArrayRef.h>
-#include <c10/util/Optional.h>
 #include <torch/csrc/jit/ir/alias_analysis.h>
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/passes/dtype_analysis.h>
 #include <torch/csrc/jit/passes/utils/op_registry.h>
 #include <torch/library.h>
+#include <optional>
 
 #ifndef AT_PER_OPERATOR_HEADERS
 #include <ATen/Functions.h>
@@ -21,8 +21,7 @@
 #include <memory>
 #include <stdexcept>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -37,7 +36,7 @@ std::unique_ptr<Stack> MTensorArgumentCreator(Node* n) {
   auto stack = std::make_unique<std::vector<IValue>>();
   for (Value* inp : n->inputs()) {
     if (auto tp = inp->type()->cast<TensorType>()) {
-      // Zero-dim tensors have special type promotion behavoir, hence the need
+      // Zero-dim tensors have special type promotion behavior, hence the need
       // for rank.
       auto rank = tp->symbolic_sizes().rank(); // Validity checked earlier
       auto tensor_size = std::vector<int64_t>(rank.value(), 1);
@@ -56,13 +55,13 @@ std::unique_ptr<Stack> MTensorArgumentCreator(Node* n) {
       stack->emplace_back(false);
     } else {
       // Arrays of values are specifically not handled due
-      // to the fact that naive default vaules would likely be
+      // to the fact that naive default values would likely be
       // incorrect anyways.
       throw std::runtime_error("Unsupported input type for Tensor argument");
     }
   }
   return stack;
-};
+}
 
 bool MTensorNodeArgValid(Value* value) {
   auto tensor_type = value->type()->cast<TensorType>();
@@ -99,10 +98,10 @@ static bool canBeInferredWithMetaTensor(Node* n) {
   return true;
 }
 
-c10::optional<Tensor> inferWithMetaTensor(Node* n) {
+std::optional<Tensor> inferWithMetaTensor(Node* n) {
   GRAPH_DEBUG("inferWithMetaTensor", getHeader(n));
   if (!canBeInferredWithMetaTensor(n)) {
-    return c10::nullopt;
+    return std::nullopt;
   }
   Operation op = n->getOperation();
   try {
@@ -116,7 +115,7 @@ c10::optional<Tensor> inferWithMetaTensor(Node* n) {
   } catch (...) {
     GRAPH_DEBUG("caught exception with Metatensor run!");
   };
-  return c10::nullopt;
+  return std::nullopt;
 }
 
 bool setDtype(
@@ -162,7 +161,7 @@ using DtypePropRule = std::function<bool(Node*)>;
 bool setIfAllDtypeMatch(Node* n) {
   // Sets all tensor outputs to the dtype of the first input
   // only if all inputs are the same dtype, otherwise do nothing
-  TORCH_INTERNAL_ASSERT(n->inputs().size() >= 1);
+  TORCH_INTERNAL_ASSERT(!n->inputs().empty());
   auto first_arg = n->inputs().at(0);
   auto tensor_type = first_arg->type()->cast<TensorType>();
   TORCH_INTERNAL_ASSERT(tensor_type, "Expecting a tensor type");
@@ -278,7 +277,7 @@ struct DtypePropagationPass {
       const at::ArrayRef<Value*>& list2) {
     // This is currently a placeholder for MobileNet
     // After Month1: implement the merge function
-    TORCH_INTERNAL_ASSERT(list1.size() == 0, "Not implemented yet");
+    TORCH_INTERNAL_ASSERT(list1.empty(), "Not implemented yet");
     return false;
   }
 
@@ -336,5 +335,4 @@ bool DtypePropagation(std::shared_ptr<Graph>& graph) {
   return changed;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

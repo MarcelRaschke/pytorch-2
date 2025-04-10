@@ -2,6 +2,8 @@
 Generic linter that greps for a pattern and optionally suggests replacements.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -10,7 +12,7 @@ import subprocess
 import sys
 import time
 from enum import Enum
-from typing import Any, List, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 
 IS_WINDOWS: bool = os.name == "nt"
@@ -28,26 +30,31 @@ class LintSeverity(str, Enum):
 
 
 class LintMessage(NamedTuple):
-    path: Optional[str]
-    line: Optional[int]
-    char: Optional[int]
+    path: str | None
+    line: int | None
+    char: int | None
     code: str
     severity: LintSeverity
     name: str
-    original: Optional[str]
-    replacement: Optional[str]
-    description: Optional[str]
+    original: str | None
+    replacement: str | None
+    description: str | None
 
 
 def as_posix(name: str) -> str:
     return name.replace("\\", "/") if IS_WINDOWS else name
 
 
-def run_command(args: List[str],) -> "subprocess.CompletedProcess[bytes]":
+def run_command(
+    args: list[str],
+) -> subprocess.CompletedProcess[bytes]:
     logging.debug("$ %s", " ".join(args))
     start_time = time.monotonic()
     try:
-        return subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,)
+        return subprocess.run(
+            args,
+            capture_output=True,
+        )
     finally:
         end_time = time.monotonic()
         logging.debug("took %dms", (end_time - start_time) * 1000)
@@ -55,20 +62,55 @@ def run_command(args: List[str],) -> "subprocess.CompletedProcess[bytes]":
 
 def lint_file(
     matching_line: str,
+    allowlist_pattern: str,
     replace_pattern: str,
     linter_name: str,
     error_name: str,
     error_description: str,
-) -> LintMessage:
+) -> LintMessage | None:
     # matching_line looks like:
     #   tools/linter/clangtidy_linter.py:13:import foo.bar.baz
     split = matching_line.split(":")
     filename = split[0]
 
+    if allowlist_pattern:
+        try:
+            proc = run_command(["grep", "-nEHI", allowlist_pattern, filename])
+        except Exception as err:
+            return LintMessage(
+                path=None,
+                line=None,
+                char=None,
+                code=linter_name,
+                severity=LintSeverity.ERROR,
+                name="command-failed",
+                original=None,
+                replacement=None,
+                description=(
+                    f"Failed due to {err.__class__.__name__}:\n{err}"
+                    if not isinstance(err, subprocess.CalledProcessError)
+                    else (
+                        "COMMAND (exit code {returncode})\n"
+                        "{command}\n\n"
+                        "STDERR\n{stderr}\n\n"
+                        "STDOUT\n{stdout}"
+                    ).format(
+                        returncode=err.returncode,
+                        command=" ".join(as_posix(x) for x in err.cmd),
+                        stderr=err.stderr.decode("utf-8").strip() or "(empty)",
+                        stdout=err.stdout.decode("utf-8").strip() or "(empty)",
+                    )
+                ),
+            )
+
+        # allowlist pattern was found, abort lint
+        if proc.returncode == 0:
+            return None
+
     original = None
     replacement = None
     if replace_pattern:
-        with open(filename, "r") as f:
+        with open(filename) as f:
             original = f.read()
 
         try:
@@ -103,7 +145,7 @@ def lint_file(
 
     return LintMessage(
         path=split[0],
-        line=int(split[1]),
+        line=int(split[1]) if len(split) > 1 else None,
         char=None,
         code=linter_name,
         severity=LintSeverity.ERROR,
@@ -116,13 +158,27 @@ def lint_file(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="grep wrapper linter.", fromfile_prefix_chars="@",
+        description="grep wrapper linter.",
+        fromfile_prefix_chars="@",
     )
     parser.add_argument(
-        "--pattern", required=True, help="pattern to grep for",
+        "--pattern",
+        required=True,
+        help="pattern to grep for",
     )
     parser.add_argument(
-        "--linter-name", required=True, help="name of the linter",
+        "--allowlist-pattern",
+        help="if this pattern is true in the file, we don't grep for pattern",
+    )
+    parser.add_argument(
+        "--linter-name",
+        required=True,
+        help="name of the linter",
+    )
+    parser.add_argument(
+        "--match-first-only",
+        action="store_true",
+        help="only match the first hit in the file",
     )
     parser.add_argument(
         "--error-name",
@@ -142,10 +198,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--verbose", action="store_true", help="verbose logging",
+        "--verbose",
+        action="store_true",
+        help="verbose logging",
     )
     parser.add_argument(
-        "filenames", nargs="+", help="paths to lint",
+        "filenames",
+        nargs="+",
+        help="paths to lint",
     )
     args = parser.parse_args()
 
@@ -159,8 +219,28 @@ def main() -> None:
         stream=sys.stderr,
     )
 
+    files_with_matches = []
+    if args.match_first_only:
+        files_with_matches = ["--files-with-matches"]
+
+    lines = []
     try:
-        proc = run_command(["grep", "-nPH", args.pattern, *args.filenames])
+        # Split the grep command into multiple batches to avoid hitting the
+        # command line length limit of ~1M on my machine
+        arg_length = sum(len(x) for x in args.filenames)
+        batches = arg_length // 750000 + 1
+        batch_size = len(args.filenames) // batches
+        for i in range(0, len(args.filenames), batch_size):
+            proc = run_command(
+                [
+                    "grep",
+                    "-nEHI",
+                    *files_with_matches,
+                    args.pattern,
+                    *args.filenames[i : i + batch_size],
+                ]
+            )
+            lines.extend(proc.stdout.decode().splitlines())
     except Exception as err:
         err_msg = LintMessage(
             path=None,
@@ -188,18 +268,19 @@ def main() -> None:
             ),
         )
         print(json.dumps(err_msg._asdict()), flush=True)
-        exit(0)
+        sys.exit(0)
 
-    lines = proc.stdout.decode().splitlines()
     for line in lines:
         lint_message = lint_file(
             line,
+            args.allowlist_pattern,
             args.replace_pattern,
             args.linter_name,
             args.error_name,
             args.error_description,
         )
-        print(json.dumps(lint_message._asdict()), flush=True)
+        if lint_message is not None:
+            print(json.dumps(lint_message._asdict()), flush=True)
 
 
 if __name__ == "__main__":

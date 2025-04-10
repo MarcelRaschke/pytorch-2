@@ -3,9 +3,9 @@
 #include <caffe2/serialize/inline_container.h>
 #include <torch/csrc/jit/api/compilation_unit.h>
 #include <torch/csrc/jit/ir/scope.h>
+#include <torch/csrc/jit/serialization/source_range_serialization.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 /*
  * MobileDebugTable:
  * Deserializes debug_pkl and callstack_map records from PT model's zip archive
@@ -52,5 +52,4 @@ class MobileDebugTable {
   ska::flat_hash_map<int64_t, DebugInfoTuple> callstack_ptr_map_;
 };
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

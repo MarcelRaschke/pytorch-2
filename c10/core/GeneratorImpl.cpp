@@ -1,5 +1,4 @@
 #include <c10/core/GeneratorImpl.h>
-#include <chrono>
 #include <random>
 
 #if defined(__SGX_ENABLED__)
@@ -9,6 +8,8 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#else
+#include <chrono>
 #endif
 
 namespace c10 {
@@ -26,7 +27,20 @@ GeneratorImpl::GeneratorImpl(Device device_in, DispatchKeySet key_set)
 c10::intrusive_ptr<GeneratorImpl> GeneratorImpl::clone() const {
   auto res = this->clone_impl();
   c10::raw::intrusive_ptr::incref(res);
+  c10::raw::weak_intrusive_ptr::incref(res);
   return c10::intrusive_ptr<GeneratorImpl>::reclaim(res);
+}
+
+void GeneratorImpl::graphsafe_set_state(
+    const c10::intrusive_ptr<c10::GeneratorImpl>& state) {
+  TORCH_CHECK_NOT_IMPLEMENTED(
+      false, "graphsafe_set_state is not supported in this Generator");
+}
+
+c10::intrusive_ptr<c10::GeneratorImpl> GeneratorImpl::graphsafe_get_state()
+    const {
+  TORCH_CHECK_NOT_IMPLEMENTED(
+      false, "graphsafe_get_state is not supported in this Generator");
 }
 
 /**
@@ -43,27 +57,26 @@ namespace detail {
  * Note this is a legacy method (from THRandom.cpp)
  * FIXME: use std::random_device with entropy information
  */
-#if !defined(_WIN32) && !defined(__XROS__)
+#if !defined(_WIN32)
 static uint64_t readURandomLong() {
   int randDev = open("/dev/urandom", O_RDONLY);
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  uint64_t randValue;
   TORCH_CHECK(randDev >= 0, "Unable to open /dev/urandom");
+  uint64_t randValue{};
   ssize_t readBytes = read(randDev, &randValue, sizeof(randValue));
+  close(randDev);
   TORCH_CHECK(
       readBytes >= (ssize_t)sizeof(randValue),
       "Unable to read from /dev/urandom");
-  close(randDev);
   return randValue;
 }
-#endif // _WIN32 && __XROS__
+#endif // _WIN32
 
 /**
  * Gets a non deterministic random number number from either the
  * /dev/urandom or the current time. For CUDA, gets random from
  * std::random_device and adds a transformation on it. For Intel SGX
  * platform use sgx_read_rand as reading from /dev/urandom is
- * prohibited on that platfrom.
+ * prohibited on that platform.
  *
  * FIXME: The behavior in this function is from legacy code
  * (THRandom_seed/THCRandom_seed) and is probably not the right thing to do,
@@ -75,16 +88,12 @@ static uint64_t readURandomLong() {
  *   a 32 bit number to 64 bit.
  */
 uint64_t getNonDeterministicRandom(bool is_cuda) {
-  // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-  uint64_t s;
+  uint64_t s = 0;
   if (!is_cuda) {
 #ifdef _WIN32
     s = (uint64_t)std::chrono::high_resolution_clock::now()
             .time_since_epoch()
             .count();
-#elif defined(__XROS__)
-    std::random_device rd;
-    s = ((((uint64_t)rd()) << 32) + rd()) & 0x1FFFFFFFFFFFFF;
 #elif defined(__SGX_ENABLED__)
     TORCH_CHECK(
         sgx_read_rand(reinterpret_cast<uint8_t*>(&s), sizeof(s)) == SGX_SUCCESS,

@@ -26,8 +26,7 @@ TEST(GraphExecutorTest, Basic_CUDA) {
   auto stack = createStack({input, hx, cx, w_ih, w_hh});
   executor.run(stack);
   ASSERT_EQ(stack.size(), 2);
-  at::Tensor r0, r1;
-  std::tie(r0, r1) = lstm(input, hx, cx, w_ih, w_hh);
+  auto [r0, r1] = lstm(input, hx, cx, w_ih, w_hh);
   ASSERT_TRUE(almostEqual(stack[0].toTensor(), r0));
   ASSERT_TRUE(almostEqual(stack[1].toTensor(), r1));
 }
@@ -59,7 +58,7 @@ TEST(GraphExecutorTest, runAsync_executor) {
     mtx.lock();
     ++asyncCounter;
     mtx.unlock();
-    at::launch(move(f));
+    at::launch(std::move(f));
   };
   std::vector<IValue> stack;
   // NOLINTNEXTLINE(modernize-use-emplace)

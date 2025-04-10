@@ -11,8 +11,9 @@
 
 #include <ATen/native/cuda/MemoryAccess.cuh>
 
+#include <tuple>
 
-namespace at { namespace native {
+namespace at::native {
 
 template<int N>
 static OffsetCalculator<N> make_input_offset_calculator(const TensorIteratorBase& iter) {
@@ -40,23 +41,26 @@ static OffsetCalculator<num_outputs> make_output_offset_calculator(const TensorI
   return OffsetCalculator<num_outputs>(iter.ndim(), iter.shape().data(), strides.data(), element_sizes);
 }
 
-template<typename func_t, typename policy_t>
+template <bool reverted_idx = false, typename func_t, typename policy_t>
 __device__ inline void elementwise_kernel_helper(func_t f, policy_t policy) {
   using traits = function_traits<func_t>;
   using return_t = typename traits::result_type;
   using args_t = typename traits::ArgsTuple;
+  constexpr int elems_per_thread = policy_t::tws;
 
   int idx = blockIdx.x;
+  if constexpr (reverted_idx)
+    idx = gridDim.x - blockIdx.x - 1;
 
-  return_t results[thread_work_size()];
-  args_t args[thread_work_size()];
+  return_t results[elems_per_thread];
+  args_t args[elems_per_thread];
 
   // load
   policy.load(args, idx);
 
   // compute
   #pragma unroll
-  for (int i = 0; i < thread_work_size(); i++) {
+  for (int i = 0; i < elems_per_thread; i++) {
     if (policy.check_inbounds(i)) {
       results[i] = c10::guts::apply(f, args[i]);
     }
@@ -66,21 +70,34 @@ __device__ inline void elementwise_kernel_helper(func_t f, policy_t policy) {
   policy.store(results, idx);
 }
 
-}}  // namespace at::native
+}  // namespace at::native
 
-// Note:
-// CUDA and ROCm get diverged in this PR:
-//   https://github.com/pytorch/pytorch/pull/32383
-// Because for some reason trying to enable vectorized
-// memory access introduce regression on ROCm.
+#include <ATen/native/cuda/CUDALoops.cuh>
 
-#if !defined(USE_ROCM)
-  #include <ATen/native/cuda/CUDALoops.cuh>
-#else
-  #include <ATen/native/cuda/ROCmLoops.cuh>
-#endif
+namespace at:: native {
 
-namespace at { namespace native {
+template <typename func_t>
+void gpu_kernel_nocast(TensorIteratorBase& iter, const func_t& f) {
+
+  for (int arg = 0; arg < iter.ntensors(); arg++) {
+    TORCH_INTERNAL_ASSERT(
+      iter.device(arg).is_cuda(),
+      "argument ", arg, ": expected a CUDA device but found ", iter.device(arg));
+  }
+
+  if (iter.numel() == 0) {
+    return;
+  }
+
+  if (!iter.can_use_32bit_indexing()) {
+    for (auto& sub_iter : iter.with_32bit_indexing()) {
+      gpu_kernel_nocast(sub_iter, f);
+    }
+    return;
+  }
+
+  gpu_kernel_impl_nocast(iter, f);
+}
 
 template <typename func_t>
 void gpu_kernel(TensorIteratorBase& iter, const func_t& f) {
@@ -180,6 +197,46 @@ void opmath_gpu_kernel_with_scalars(TensorIteratorBase& iter, const func_t& f) {
   }
 }
 
+template <typename scalar_t, typename return_t = scalar_t, typename func_t>
+void opmath_symmetric_gpu_kernel_with_scalars(TensorIteratorBase& iter, const func_t& f) {
+  // Use symmetric property of the functor to reduce number of kernels,
+  // requires f(a, b) == f(b, a)
+  TORCH_INTERNAL_ASSERT(iter.ntensors() == 3);
+
+  using traits = function_traits<func_t>;
+  using opmath_arg_t = typename traits::template arg<0>::type;
+  static_assert(
+      traits::arity == 2,
+      "gpu_kernel_with_scalars only supports two input arguments");
+  static_assert(std::is_same_v<opmath_arg_t, typename traits::template arg<1>::type>,
+                "f is not symmetric");
+
+  OptionalDeviceGuard device_guard;
+  opmath_arg_t scalar_val{};
+
+  if (iter.is_cpu_scalar(1)) {
+    scalar_val = iter.scalar_value<opmath_arg_t>(1);
+    iter.remove_operand(1);
+
+    // TODO: When all kernels that use gpu_kernel_with_scalars are
+    // ported to structured, this device guard can be deleted.  This
+    // works around incorrect device guard generation for pre-structured
+    // kernels device guards, but structured kernels do it right and
+    // we can assume the device is already set correctly
+    device_guard.reset_device(iter.device(1));
+  } else if (iter.is_cpu_scalar(2)) {
+    scalar_val = iter.scalar_value<opmath_arg_t>(2);
+    iter.remove_operand(2);
+  }
+
+  if (iter.ninputs() == 2) {
+    gpu_kernel(iter, BinaryFunctor<scalar_t, scalar_t, return_t, func_t>(f));
+  } else {
+    AUnaryFunctor<scalar_t, scalar_t, return_t, func_t> unary_f(f, scalar_val);
+    gpu_kernel(iter, unary_f);
+  }
+}
+
 // Legacy variant that assumes that func_t has the correct types
 // that we expect to load from memory
 template <typename func_t>
@@ -229,7 +286,7 @@ void gpu_kernel_multiple_outputs_impl(TensorIteratorBase& iter, const func_t& f)
   TORCH_INTERNAL_ASSERT(iter.can_use_32bit_indexing());
   TORCH_INTERNAL_ASSERT(iter.ntensors() == ntensors);
 
-  at::detail::Array<char*, ntensors> data;
+  std::array<char*, ntensors> data;
   for (int i = 0; i < ntensors; i++) {
     data[i] = (char*)iter.data_ptr(i);
   }
@@ -270,4 +327,4 @@ void gpu_kernel_multiple_outputs(TensorIteratorBase& iter, const func_t& f) {
   gpu_kernel_multiple_outputs_impl(iter, f);
 }
 
-}} //namespace at::native
+} //namespace at::native

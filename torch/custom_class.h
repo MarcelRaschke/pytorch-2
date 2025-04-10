@@ -12,7 +12,8 @@
 #include <c10/util/TypeTraits.h>
 #include <torch/custom_class_detail.h>
 #include <torch/library.h>
-#include <iostream>
+
+#include <functional>
 #include <sstream>
 
 namespace torch {
@@ -61,7 +62,7 @@ decltype(auto) init(Func&& f) {
 template <class CurClass>
 class class_ : public ::torch::detail::class_base {
   static_assert(
-      std::is_base_of<CustomClassHolder, CurClass>::value,
+      std::is_base_of_v<CustomClassHolder, CurClass>,
       "torch::class_<T> requires T to inherit from CustomClassHolder");
 
  public:
@@ -104,7 +105,7 @@ class class_ : public ::torch::detail::class_base {
         "__init__",
         std::move(func),
         std::move(doc_string),
-        std::move(default_args));
+        default_args);
     return *this;
   }
 
@@ -118,7 +119,7 @@ class class_ : public ::torch::detail::class_base {
                                    c10::tagged_capsule<CurClass> self,
                                    ParameterTypes... arg) {
       c10::intrusive_ptr<CurClass> classObj =
-          at::guts::invoke(func, std::forward<ParameterTypes>(arg)...);
+          std::invoke(func, std::forward<ParameterTypes>(arg)...);
       auto object = self.ivalue.toObject();
       object->setSlot(0, c10::IValue::make_capsule(classObj));
     };
@@ -127,7 +128,7 @@ class class_ : public ::torch::detail::class_base {
         "__init__",
         std::move(init_lambda_wrapper),
         std::move(doc_string),
-        std::move(default_args));
+        default_args);
 
     return *this;
   }
@@ -161,7 +162,7 @@ class class_ : public ::torch::detail::class_base {
         std::move(name),
         std::move(wrapped_f),
         std::move(doc_string),
-        std::move(default_args));
+        default_args);
     return *this;
   }
 
@@ -197,8 +198,8 @@ class class_ : public ::torch::detail::class_base {
       GetterFunc getter_func,
       SetterFunc setter_func,
       std::string doc_string = "") {
-    torch::jit::Function* getter;
-    torch::jit::Function* setter;
+    torch::jit::Function* getter{};
+    torch::jit::Function* setter{};
 
     auto wrapped_getter =
         detail::wrap_func<CurClass, GetterFunc>(std::move(getter_func));
@@ -218,7 +219,7 @@ class class_ : public ::torch::detail::class_base {
       const std::string& name,
       GetterFunc getter_func,
       std::string doc_string = "") {
-    torch::jit::Function* getter;
+    torch::jit::Function* getter{};
 
     auto wrapped_getter =
         detail::wrap_func<CurClass, GetterFunc>(std::move(getter_func));
@@ -258,7 +259,7 @@ class class_ : public ::torch::detail::class_base {
   /// This is an unsafe method registration API added for adding custom JIT
   /// backend support via custom C++ classes. It is not for general purpose use.
   class_& _def_unboxed(
-      std::string name,
+      const std::string& name,
       std::function<void(jit::Stack&)> func,
       c10::FunctionSchema schema,
       std::string doc_string = "") {
@@ -314,18 +315,18 @@ class class_ : public ::torch::detail::class_base {
     def("__getstate__", std::forward<GetStateFn>(get_state));
 
     // __setstate__ needs to be registered with some custom handling:
-    // We need to wrap the invocation of of the user-provided function
+    // We need to wrap the invocation of the user-provided function
     // such that we take the return value (i.e. c10::intrusive_ptr<CurrClass>)
     // and assign it to the `capsule` attribute.
     using SetStateTraits =
         c10::guts::infer_function_traits_t<std::decay_t<SetStateFn>>;
     using SetStateArg = typename c10::guts::typelist::head_t<
         typename SetStateTraits::parameter_types>;
-    auto setstate_wrapper = [set_state = std::move(set_state)](
+    auto setstate_wrapper = [set_state = std::forward<SetStateFn>(set_state)](
                                 c10::tagged_capsule<CurClass> self,
-                                SetStateArg&& arg) {
+                                SetStateArg arg) {
       c10::intrusive_ptr<CurClass> classObj =
-          at::guts::invoke(set_state, std::forward<SetStateArg>(arg));
+          std::invoke(set_state, std::move(arg));
       auto object = self.ivalue.toObject();
       object->setSlot(0, c10::IValue::make_capsule(classObj));
     };
@@ -336,11 +337,13 @@ class class_ : public ::torch::detail::class_base {
 
     // type validation
     auto getstate_schema = classTypePtr->getMethod("__getstate__").getSchema();
+#ifndef STRIP_ERROR_MESSAGES
     auto format_getstate_schema = [&getstate_schema]() {
       std::stringstream ss;
       ss << getstate_schema;
       return ss.str();
     };
+#endif
     TORCH_CHECK(
         getstate_schema.arguments().size() == 1,
         "__getstate__ should take exactly one argument: self. Got: ",

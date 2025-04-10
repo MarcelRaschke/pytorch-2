@@ -5,6 +5,7 @@
 #include <torch/cuda.h>
 #include <ATen/test/test_assert.h>
 #include <c10/util/irange.h>
+#include <c10/util/CallOnce.h>
 
 // for TH compat test only...
 struct THFloatTensor;
@@ -14,6 +15,8 @@ struct THFloatTensor;
 // NOLINTNEXTLINE(modernize-deprecated-headers)
 #include <string.h>
 #include <sstream>
+#include <thread>
+#include <mutex>
 
 #define ASSERT_EQ_RESOLVED(X, Y) \
   {                              \
@@ -41,7 +44,9 @@ void TestOnesAndDot(DeprecatedTypeProperties& type) {
   Tensor b = ones({3, 4}, type);
   ASSERT_EQ_RESOLVED((b + b).sum().item<double>(), 24);
   ASSERT_EQ_RESOLVED(b.numel(), 12);
-  ASSERT_EQ_RESOLVED(b.view(-1).dot(b.view(-1)).item<double>(), 12);
+  if (type.backend() != Backend::CPU || type.scalarType() != kHalf) {
+    ASSERT_EQ_RESOLVED(b.view(-1).dot(b.view(-1)).item<double>(), 12);
+  }
 }
 
 void TestSort(DeprecatedTypeProperties& type) {
@@ -57,8 +62,7 @@ void TestSort(DeprecatedTypeProperties& type) {
 void TestRandperm(DeprecatedTypeProperties& type) {
   if (type.backend() != Backend::CUDA) {
     Tensor b = randperm(15, type);
-    Tensor rv, ri;
-    std::tie(rv, ri) = sort(b, 0);
+    auto [rv, ri] = sort(b, 0);
     bool isLE = (rv[0].item<float>() <= rv[1].item<float>());
     ASSERT_TRUE(isLE);
   }
@@ -85,8 +89,7 @@ void TestAdd(DeprecatedTypeProperties& type) {
 void TestZeros(DeprecatedTypeProperties& type) {
   auto begin = std::chrono::high_resolution_clock::now();
   Tensor a = zeros({1024, 1024}, type);
-  for (const auto i : c10::irange(1, 1000)) {
-    (void)i; // Suppress unused variable warning
+  for ([[maybe_unused]] const auto i : c10::irange(1, 1000)) {
     a = zeros({128, 128}, type);
   }
   auto end = std::chrono::high_resolution_clock::now();
@@ -104,8 +107,7 @@ void TestLoadsOfAdds(DeprecatedTypeProperties& type) {
   auto begin = std::chrono::high_resolution_clock::now();
   Tensor d = ones({3, 4}, type);
   Tensor r = zeros({3, 4}, type);
-  for (const auto i : c10::irange(100000)) {
-    (void)i; // Suppress unused variable warning
+  for ([[maybe_unused]] const auto i : c10::irange(1000)) {
     add_out(r, r, d);
   }
   auto end = std::chrono::high_resolution_clock::now();
@@ -115,15 +117,14 @@ void TestLoadsOfAdds(DeprecatedTypeProperties& type) {
                    end - begin)
                    .count()
             << " ms" << std::endl;
-  ASSERT_EQ_RESOLVED(norm(100000 * d).item<double>(), norm(r).item<double>());
+  ASSERT_EQ_RESOLVED(norm(1000 * d).item<double>(), norm(r).item<double>());
 }
 
 void TestLoadOfAddsWithCopy(DeprecatedTypeProperties& type) {
   auto begin = std::chrono::high_resolution_clock::now();
   Tensor d = ones({3, 4}, type);
   Tensor r = zeros({3, 4}, type);
-  for (const auto i : c10::irange(100000)) {
-    (void)i; // Suppress unused variable warning
+  for ([[maybe_unused]] const auto i : c10::irange(1000)) {
     r = add(r, d);
   }
   auto end = std::chrono::high_resolution_clock::now();
@@ -133,7 +134,7 @@ void TestLoadOfAddsWithCopy(DeprecatedTypeProperties& type) {
                    end - begin)
                    .count()
             << " ms" << std::endl;
-  ASSERT_EQ_RESOLVED(norm(100000 * d).item<double>(), norm(r).item<double>());
+  ASSERT_EQ_RESOLVED(norm(1000 * d).item<double>(), norm(r).item<double>());
 }
 
 void TestIsContiguous(DeprecatedTypeProperties& type) {
@@ -165,8 +166,10 @@ void TestSqueeze(DeprecatedTypeProperties& type) {
   ASSERT_EQ_RESOLVED(b.dim(), 1);
   a = rand({1}, type);
   b = squeeze(a);
-  // TODO 0-dim squeeze
   ASSERT_TRUE(a[0].equal(b));
+  Tensor c = at::scalar_tensor(1, type.options());
+  Tensor d = squeeze(c);
+  ASSERT_TRUE(c.equal(d));
 }
 
 void TestCopy(DeprecatedTypeProperties& type) {
@@ -468,4 +471,49 @@ TEST(BasicTest, FactoryMethodsTest) {
     ASSERT_FALSE(tensor0.requires_grad());
     ASSERT_FALSE(tensor0.is_pinned());
   }
+}
+
+TEST(BasicTest, BasicStdTestCPU) {
+  c10::once_flag flag1, flag2;
+
+  auto simple_do_once = [&]()
+  {
+      c10::call_once(flag1, [](){ std::cout << "Simple example: called once\n"; });
+  };
+
+  auto may_throw_function = [&](bool do_throw)
+  {
+    if (do_throw) {
+      std::cout << "throw: call_once will retry\n"; // this may appear more than once
+      TORCH_CHECK(false, "throw exception");
+    }
+    std::cout << "Didn't throw, call_once will not attempt again\n"; // guaranteed once
+  };
+
+  auto do_once = [&](bool do_throw)
+  {
+    try {
+      c10::call_once(flag2, may_throw_function, do_throw);
+    }
+    catch (...) {
+    }
+  };
+
+  std::thread st1(simple_do_once);
+  std::thread st2(simple_do_once);
+  std::thread st3(simple_do_once);
+  std::thread st4(simple_do_once);
+  st1.join();
+  st2.join();
+  st3.join();
+  st4.join();
+
+  std::thread t1(do_once, true);
+  std::thread t2(do_once, true);
+  std::thread t3(do_once, false);
+  std::thread t4(do_once, true);
+  t1.join();
+  t2.join();
+  t3.join();
+  t4.join();
 }

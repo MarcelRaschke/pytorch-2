@@ -1,14 +1,16 @@
-#include <c10d/FileStore.hpp>
+#include <c10/util/error.h>
+#include <torch/csrc/distributed/c10d/FileStore.hpp>
 
-#include <assert.h>
 #include <fcntl.h>
-#include <stdint.h>
 #include <sys/stat.h>
+#include <cassert>
+#include <cstdint>
 
 #ifdef _WIN32
 #include <c10/util/win32-headers.h>
 #include <fileapi.h>
 #include <io.h>
+#include <filesystem>
 #else
 #include <sys/file.h>
 #include <unistd.h>
@@ -16,18 +18,14 @@
 
 #include <chrono>
 #include <cstdio>
-#include <functional>
-#include <iostream>
-#include <limits>
-#include <sstream>
-#include <system_error>
 #include <thread>
+#include <utility>
 
 #include <c10/util/Exception.h>
 
-#define SYSASSERT(rv, ...)                                                 \
-  if ((rv) < 0) {                                                          \
-    throw std::system_error(errno, std::system_category(), ##__VA_ARGS__); \
+#define SYSASSERT(rv, ...)                                         \
+  if ((rv) < 0) {                                                  \
+    C10_THROW_ERROR(DistStoreError, c10::utils::str_error(errno)); \
   }
 
 #ifdef _WIN32
@@ -69,7 +67,7 @@ namespace c10d {
 namespace {
 
 template <typename F>
-typename std::result_of<F()>::type syscall(F fn) {
+auto syscall(F fn) {
   while (true) {
     auto rv = fn();
     if (rv == -1) {
@@ -79,6 +77,7 @@ typename std::result_of<F()>::type syscall(F fn) {
     }
     return rv;
   }
+  return typename std::invoke_result_t<F>{-1};
 }
 
 // For a comprehensive overview of file locking methods,
@@ -93,12 +92,14 @@ class Lock {
     flock(operation);
   }
 
+  // NOLINTNEXTLINE(bugprone-exception-escape)
   ~Lock() {
     unlock();
   }
 
   Lock(const Lock& that) = delete;
 
+  Lock& operator=(const Lock& other) = delete;
   Lock& operator=(Lock&& other) noexcept {
     if (this != &other) {
       fd_ = other.fd_;
@@ -125,7 +126,7 @@ class Lock {
 #ifdef _WIN32
     auto rv = syscall(std::bind(::flock_, fd_, operation));
 #else
-    auto rv = syscall(std::bind(::flock, fd_, operation));
+    auto rv = syscall([this, operation] { return ::flock(fd_, operation); });
 #endif
     SYSASSERT(rv, "flock");
   }
@@ -143,7 +144,9 @@ class File {
       fd_ = syscall(std::bind(
           ::open, path.c_str(), flags | _O_BINARY, _S_IREAD | _S_IWRITE));
 #else
-      fd_ = syscall(std::bind(::open, path.c_str(), flags, 0644));
+      fd_ = syscall([capture0 = path.c_str(), flags] {
+        return ::open(capture0, flags, 0644);
+      });
 #endif
       // Only retry when the file doesn't exist, since we are waiting for the
       // file to be created in this case to address the following issue:
@@ -151,6 +154,13 @@ class File {
       if (fd_ >= 0 || errno != ENOENT) {
         break;
       }
+#ifdef _WIN32
+      // if the parent folder doesn't exist it will never be able to create the
+      // file so we can skip the retry
+      if (!std::filesystem::exists(std::filesystem::path(path).parent_path())) {
+        break;
+      }
+#endif
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
           std::chrono::steady_clock::now() - start);
       if (timeout != c10d::Store::kNoTimeout && elapsed > timeout) {
@@ -160,6 +170,10 @@ class File {
     }
     SYSASSERT(fd_, "open(" + path + ")");
   }
+  File(const File&) = delete;
+  File& operator=(const File&) = delete;
+  File(File&&) noexcept = delete;
+  File& operator=(File&&) noexcept = delete;
 
   ~File() {
     ::close(fd_);
@@ -174,13 +188,14 @@ class File {
   }
 
   off_t seek(off_t offset, int whence) {
-    auto rv = syscall(std::bind(lseek, fd_, offset, whence));
+    auto rv =
+        syscall([this, offset, whence] { return lseek(fd_, offset, whence); });
     SYSASSERT(rv, "lseek");
     return rv;
   }
 
   off_t tell() {
-    auto rv = syscall(std::bind(lseek, fd_, 0, SEEK_CUR));
+    auto rv = syscall([this] { return lseek(fd_, 0, SEEK_CUR); });
     SYSASSERT(rv, "lseek");
     return rv;
   }
@@ -194,7 +209,8 @@ class File {
 
   void write(const void* buf, size_t count) {
     while (count > 0) {
-      auto rv = syscall(std::bind(::write, fd_, buf, count));
+      auto rv =
+          syscall([this, buf, count] { return ::write(fd_, buf, count); });
       SYSASSERT(rv, "write");
       buf = (uint8_t*)buf + rv;
       count -= rv;
@@ -203,7 +219,7 @@ class File {
 
   void read(void* buf, size_t count) {
     while (count > 0) {
-      auto rv = syscall(std::bind(::read, fd_, buf, count));
+      auto rv = syscall([this, buf, count] { return ::read(fd_, buf, count); });
       SYSASSERT(rv, "read");
       buf = (uint8_t*)buf + rv;
       count -= rv;
@@ -225,7 +241,7 @@ class File {
   }
 
   void read(std::string& str) {
-    uint32_t len;
+    uint32_t len = 0;
     read(&len, sizeof(len));
     std::vector<uint8_t> buf(len);
     read(buf.data(), len);
@@ -233,7 +249,7 @@ class File {
   }
 
   void read(std::vector<uint8_t>& data) {
-    uint32_t len;
+    uint32_t len = 0;
     read(&len, sizeof(len));
     data.resize(len);
     read(data.data(), len);
@@ -247,7 +263,7 @@ off_t refresh(
     File& file,
     off_t pos,
     std::unordered_map<std::string, std::vector<uint8_t>>& cache,
-    const std::string deletePrefix) {
+    const std::string& deletePrefix) {
   auto size = file.size();
   if (size != pos) {
     std::string tmpKey;
@@ -270,15 +286,22 @@ off_t refresh(
 
 } // namespace
 
-FileStore::FileStore(const std::string& path, int numWorkers)
-    : Store(),
-      path_(path),
-      pos_(0),
+FileStore::FileStore(std::string path, int numWorkers)
+    : path_(std::move(path)),
+
       numWorkers_(numWorkers),
       cleanupKey_("cleanup/"),
+      refCountKey_("refcount/"),
       regularPrefix_("/"),
-      deletePrefix_("-") {}
+      deletePrefix_("-") {
+  addHelper(refCountKey_, 1);
+}
 
+c10::intrusive_ptr<Store> FileStore::clone() {
+  return c10::make_intrusive<FileStore>(path_, numWorkers_);
+}
+
+// NOLINTNEXTLINE(bugprone-exception-escape)
 FileStore::~FileStore() {
   // If the file does not exist - exit.
   // This can happen when FileStore is invoked from python language which has
@@ -294,15 +317,18 @@ FileStore::~FileStore() {
   if (res == -1) {
     return;
   }
+
   // cleanup key will be different from all rest keys since all rest keys will
   // have a regular prefix.
   auto numFinishedWorker = addHelper(cleanupKey_, 1);
+  auto refCount = addHelper(refCountKey_, -1);
   // The last worker cleans up the file. If numWorkers was not initialized to
   // a specific postive value (i.e. meaning that there was not a fixed number
   // of workers), we don't attempt to clean.
-  if (numWorkers_ >= 0 && numFinishedWorker == numWorkers_) {
+  // Clean up the file if number of references is 0.
+  if (refCount == 0 && numWorkers_ >= 0 && numFinishedWorker >= numWorkers_) {
     // Best effort removal without checking the return
-    std::remove(path_.c_str());
+    ::remove(path_.c_str());
   }
 }
 
@@ -358,8 +384,13 @@ std::vector<uint8_t> FileStore::get(const std::string& key) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
           std::chrono::steady_clock::now() - start);
       if (timeout_ != kNoTimeout && elapsed > timeout_) {
-          auto err = c10::str("Timeout waiting for key: ", key, " after ", timeout_.count(), " ms");
-          TORCH_CHECK(false, err);
+        auto err = c10::str(
+            "Timeout waiting for key: ",
+            key,
+            " after ",
+            timeout_.count(),
+            " ms");
+        TORCH_CHECK(false, err);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
@@ -405,7 +436,7 @@ int64_t FileStore::getNumKeys() {
   File file(path_, O_RDONLY, timeout_);
   auto lock = file.lockShared();
   pos_ = refresh(file, pos_, cache_, deletePrefix_);
-  return cache_.size();
+  return static_cast<int64_t>(cache_.size());
 }
 
 bool FileStore::deleteKey(const std::string& key) {

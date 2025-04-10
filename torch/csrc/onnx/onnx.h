@@ -1,7 +1,6 @@
 #pragma once
 
-namespace torch {
-namespace onnx {
+namespace torch::onnx {
 
 enum class OperatorExportTypes {
   ONNX, // Strict ONNX export
@@ -16,5 +15,6 @@ enum class TrainingMode {
   TRAINING, // Training mode
 };
 
-} // namespace onnx
-} // namespace torch
+constexpr auto kOnnxNodeNameAttribute = "onnx_name";
+
+} // namespace torch::onnx

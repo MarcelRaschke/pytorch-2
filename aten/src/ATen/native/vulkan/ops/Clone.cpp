@@ -1,19 +1,24 @@
 #include <ATen/native/vulkan/ops/Common.h>
 #include <torch/library.h>
 
-namespace at {
-namespace native {
-namespace vulkan {
-namespace ops {
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#else
+#include <ATen/ops/empty_like.h>
+#include <ATen/ops/empty_strided.h>
+#endif
+
+namespace at::native::vulkan::ops {
 namespace {
 
-Tensor clone(const Tensor& src, c10::optional<c10::MemoryFormat> optional_memory_format) {
-  auto memory_format =
-      optional_memory_format.value_or(MemoryFormat::Preserve);
+Tensor clone(
+    const Tensor& src,
+    std::optional<c10::MemoryFormat> optional_memory_format) {
+  auto memory_format = optional_memory_format.value_or(MemoryFormat::Preserve);
   TORCH_CHECK(
-        (c10::MemoryFormat::Preserve == memory_format) ||
+      (c10::MemoryFormat::Preserve == memory_format) ||
           (c10::MemoryFormat::Contiguous == memory_format),
-      "Vulkan supports Preserve and Contiguous memory foramts");
+      "Vulkan supports Preserve and Contiguous memory formats");
 
   Tensor self;
   if (memory_format == MemoryFormat::Preserve) {
@@ -40,7 +45,4 @@ TORCH_LIBRARY_IMPL(aten, Vulkan, m) {
 #endif /* USE_VULKAN_API */
 
 } // namespace
-} // namespace ops
-} // namespace vulkan
-} // namespace native
-} // namespace at
+} // namespace at::native::vulkan::ops

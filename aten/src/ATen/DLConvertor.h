@@ -1,7 +1,7 @@
 #pragma once
 
-#include <ATen/Tensor.h>
 #include <ATen/ATen.h>
+#include <ATen/Tensor.h>
 #include <ATen/dlpack.h>
 
 // this convertor will:
@@ -12,8 +12,10 @@ namespace at {
 
 TORCH_API ScalarType toScalarType(const DLDataType& dtype);
 TORCH_API DLManagedTensor* toDLPack(const Tensor& src);
-TORCH_API Tensor fromDLPack(const DLManagedTensor* src);
+TORCH_API Tensor fromDLPack(DLManagedTensor* src);
+TORCH_API Tensor
+fromDLPack(DLManagedTensor* src, std::function<void(void*)> deleter);
 TORCH_API DLDataType getDLDataType(const Tensor& t);
 TORCH_API DLDevice getDLContext(const Tensor& tensor, const int64_t& device_id);
 
-} //namespace at
+} // namespace at

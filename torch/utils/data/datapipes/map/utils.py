@@ -1,6 +1,11 @@
+# mypy: allow-untyped-defs
 import copy
 import warnings
+
 from torch.utils.data.datapipes.datapipe import MapDataPipe
+
+
+__all__ = ["SequenceWrapperMapDataPipe"]
 
 
 class SequenceWrapperMapDataPipe(MapDataPipe):
@@ -18,6 +23,7 @@ class SequenceWrapperMapDataPipe(MapDataPipe):
       across iterations.
 
     Example:
+        >>> # xdoctest: +SKIP
         >>> from torchdata.datapipes.map import SequenceWrapper
         >>> dp = SequenceWrapper(range(10))
         >>> list(dp)
@@ -26,6 +32,7 @@ class SequenceWrapperMapDataPipe(MapDataPipe):
         >>> dp['a']
         100
     """
+
     def __init__(self, sequence, deepcopy=True):
         if deepcopy:
             try:

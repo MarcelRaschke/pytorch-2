@@ -12,18 +12,16 @@
 #include <torch/csrc/jit/runtime/graph_executor.h>
 #include <torch/csrc/jit/runtime/operator.h>
 
-#include <typeinfo>
-
 #include <pybind11/pybind11.h>
 #include <torch/csrc/Exceptions.h>
 #include <torch/csrc/autograd/python_engine.h>
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/csrc/jit/python/pybind.h>
+#include <torch/csrc/utils/pybind.h>
 
 namespace py = pybind11;
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 namespace {
 
@@ -83,5 +81,4 @@ RegisterOperators reg({Operator(
     aliasAnalysisIsSpecialCase())});
 
 } // namespace
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

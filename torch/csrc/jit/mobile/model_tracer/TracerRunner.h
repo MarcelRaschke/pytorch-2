@@ -1,13 +1,15 @@
 #pragma once
 
+#include <set>
+#include <string>
+#include <vector>
+
 #include <ATen/core/ivalue.h>
 #include <torch/csrc/jit/mobile/model_tracer/BuildFeatureTracer.h>
 #include <torch/csrc/jit/mobile/model_tracer/CustomClassTracer.h>
 #include <torch/csrc/jit/mobile/model_tracer/KernelDTypeTracer.h>
 
-namespace torch {
-namespace jit {
-namespace mobile {
+namespace torch::jit::mobile {
 
 const std::vector<std::string> always_included_traced_ops = {
     // The following are called from setup sections.
@@ -24,7 +26,14 @@ struct TracerResult {
   std::set<std::string> enabled_backends;
 };
 
+/**
+ * Trace a single model and return the TracerResult.
+ */
 TracerResult trace_run(const std::string& input_module_path);
-} // namespace mobile
-} // namespace jit
-} // namespace torch
+
+/**
+ * Trace multiple models and return the TracerResult.
+ */
+TracerResult trace_run(const std::vector<std::string>& input_module_paths);
+
+} // namespace torch::jit::mobile

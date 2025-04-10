@@ -3,6 +3,7 @@
 #include <complex>
 
 #include <c10/macros/Macros.h>
+#include <c10/util/Half.h>
 
 #if defined(__CUDACC__) || defined(__HIPCC__)
 #include <thrust/complex.h>
@@ -168,13 +169,11 @@ struct alignas(sizeof(T) * 2) complex {
   // c10::complex<double>
   template <typename U = T>
   C10_HOST_DEVICE explicit constexpr complex(
-      const std::enable_if_t<std::is_same<U, float>::value, complex<double>>&
-          other)
+      const std::enable_if_t<std::is_same_v<U, float>, complex<double>>& other)
       : real_(other.real_), imag_(other.imag_) {}
   template <typename U = T>
   C10_HOST_DEVICE constexpr complex(
-      const std::enable_if_t<std::is_same<U, double>::value, complex<float>>&
-          other)
+      const std::enable_if_t<std::is_same_v<U, double>, complex<float>>& other)
       : real_(other.real_), imag_(other.imag_) {}
 
   constexpr complex<T>& operator=(T re) {
@@ -247,13 +246,38 @@ struct alignas(sizeof(T) * 2) complex {
   constexpr FORCE_INLINE_APPLE complex<T>& operator/=(const complex<U>& rhs)
       __ubsan_ignore_float_divide_by_zero__ {
     // (a + bi) / (c + di) = (ac + bd)/(c^2 + d^2) + (bc - ad)/(c^2 + d^2) i
+    // the calculation below follows numpy's complex division
     T a = real_;
     T b = imag_;
     U c = rhs.real();
     U d = rhs.imag();
-    auto denominator = c * c + d * d;
-    real_ = (a * c + b * d) / denominator;
-    imag_ = (b * c - a * d) / denominator;
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // std::abs is already constexpr by gcc
+    auto abs_c = std::abs(c);
+    auto abs_d = std::abs(d);
+#else
+    auto abs_c = c < 0 ? -c : c;
+    auto abs_d = d < 0 ? -d : d;
+#endif
+
+    if (abs_c >= abs_d) {
+      if (abs_c == U(0) && abs_d == U(0)) {
+        /* divide by zeros should yield a complex inf or nan */
+        real_ = a / abs_c;
+        imag_ = b / abs_d;
+      } else {
+        auto rat = d / c;
+        auto scl = U(1.0) / (c + d * rat);
+        real_ = (a + b * rat) * scl;
+        imag_ = (b - a * rat) * scl;
+      }
+    } else {
+      auto rat = c / d;
+      auto scl = U(1.0) / (d + c * rat);
+      real_ = (a * rat + b) * scl;
+      imag_ = (b * rat - a) * scl;
+    }
     return *this;
   }
 #undef FORCE_INLINE_APPLE
@@ -297,7 +321,7 @@ struct alignas(sizeof(T) * 2) complex {
   constexpr void real(T value) {
     real_ = value;
   }
-  constexpr T imag() const {
+  C10_HOST_DEVICE constexpr T imag() const {
     return imag_;
   }
   constexpr void imag(T value) {
@@ -307,19 +331,19 @@ struct alignas(sizeof(T) * 2) complex {
 
 namespace complex_literals {
 
-constexpr complex<float> operator"" _if(long double imag) {
+constexpr complex<float> operator""_if(long double imag) {
   return complex<float>(0.0f, static_cast<float>(imag));
 }
 
-constexpr complex<double> operator"" _id(long double imag) {
+constexpr complex<double> operator""_id(long double imag) {
   return complex<double>(0.0, static_cast<double>(imag));
 }
 
-constexpr complex<float> operator"" _if(unsigned long long imag) {
+constexpr complex<float> operator""_if(unsigned long long imag) {
   return complex<float>(0.0f, static_cast<float>(imag));
 }
 
-constexpr complex<double> operator"" _id(unsigned long long imag) {
+constexpr complex<double> operator""_id(unsigned long long imag) {
   return complex<double>(0.0, static_cast<double>(imag));
 }
 
@@ -410,9 +434,9 @@ constexpr complex<T> operator/(const T& lhs, const complex<T>& rhs) {
 // not support this when T is a floating-point number. This is useful because it
 // saves a lot of "static_cast" when operate a complex and an integer. This
 // makes the code both less verbose and potentially more efficient.
-#define COMPLEX_INTEGER_OP_TEMPLATE_CONDITION                           \
-  typename std::enable_if_t<                                            \
-      std::is_floating_point<fT>::value && std::is_integral<iT>::value, \
+#define COMPLEX_INTEGER_OP_TEMPLATE_CONDITION                 \
+  typename std::enable_if_t<                                  \
+      std::is_floating_point_v<fT> && std::is_integral_v<iT>, \
       int> = 0
 
 template <typename fT, typename iT, COMPLEX_INTEGER_OP_TEMPLATE_CONDITION>
@@ -510,23 +534,6 @@ std::basic_istream<CharT, Traits>& operator>>(
 //
 // The implementation of these functions also follow the design of C++20
 
-#if defined(__CUDACC__) || defined(__HIPCC__)
-namespace c10_internal {
-template <typename T>
-C10_HOST_DEVICE constexpr thrust::complex<T>
-cuda101bug_cast_c10_complex_to_thrust_complex(const c10::complex<T>& x) {
-#if defined(CUDA_VERSION) && (CUDA_VERSION < 10020)
-  // This is to circumvent a CUDA compilation bug. See
-  // https://github.com/pytorch/pytorch/pull/38941 . When the bug is fixed, we
-  // should do static_cast directly.
-  return thrust::complex<T>(x.real(), x.imag());
-#else
-  return static_cast<thrust::complex<T>>(x);
-#endif
-}
-} // namespace c10_internal
-#endif
-
 namespace std {
 
 template <typename T>
@@ -542,8 +549,7 @@ constexpr T imag(const c10::complex<T>& z) {
 template <typename T>
 C10_HOST_DEVICE T abs(const c10::complex<T>& z) {
 #if defined(__CUDACC__) || defined(__HIPCC__)
-  return thrust::abs(
-      c10_internal::cuda101bug_cast_c10_complex_to_thrust_complex(z));
+  return thrust::abs(static_cast<thrust::complex<T>>(z));
 #else
   return std::abs(static_cast<std::complex<T>>(z));
 #endif
@@ -600,6 +606,55 @@ C10_HOST_DEVICE complex<T> polar(const T& r, const T& theta = T()) {
   return complex<T>(r * std::cos(theta), r * std::sin(theta));
 #endif
 }
+
+template <>
+struct alignas(4) complex<Half> {
+  Half real_;
+  Half imag_;
+
+  // Constructors
+  complex() = default;
+  // Half constructor is not constexpr so the following constructor can't
+  // be constexpr
+  C10_HOST_DEVICE explicit inline complex(const Half& real, const Half& imag)
+      : real_(real), imag_(imag) {}
+  C10_HOST_DEVICE inline complex(const c10::complex<float>& value)
+      : real_(value.real()), imag_(value.imag()) {}
+
+  // Conversion operator
+  inline C10_HOST_DEVICE operator c10::complex<float>() const {
+    return {real_, imag_};
+  }
+
+  constexpr C10_HOST_DEVICE Half real() const {
+    return real_;
+  }
+  constexpr C10_HOST_DEVICE Half imag() const {
+    return imag_;
+  }
+
+  C10_HOST_DEVICE complex<Half>& operator+=(const complex<Half>& other) {
+    real_ = static_cast<float>(real_) + static_cast<float>(other.real_);
+    imag_ = static_cast<float>(imag_) + static_cast<float>(other.imag_);
+    return *this;
+  }
+
+  C10_HOST_DEVICE complex<Half>& operator-=(const complex<Half>& other) {
+    real_ = static_cast<float>(real_) - static_cast<float>(other.real_);
+    imag_ = static_cast<float>(imag_) - static_cast<float>(other.imag_);
+    return *this;
+  }
+
+  C10_HOST_DEVICE complex<Half>& operator*=(const complex<Half>& other) {
+    auto a = static_cast<float>(real_);
+    auto b = static_cast<float>(imag_);
+    auto c = static_cast<float>(other.real());
+    auto d = static_cast<float>(other.imag());
+    real_ = a * c - b * d;
+    imag_ = a * d + b * c;
+    return *this;
+  }
+};
 
 } // namespace c10
 

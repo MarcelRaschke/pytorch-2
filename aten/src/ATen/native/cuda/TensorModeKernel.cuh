@@ -5,8 +5,7 @@
 #include <ATen/native/cuda/SortingCommon.cuh>
 #include <ATen/native/cuda/block_reduce.cuh>
 
-namespace at {
-namespace native {
+namespace at::native {
 
 // Used for a segmented reduction
 struct ModeUnsignedBoolPair {
@@ -194,8 +193,11 @@ __device__ inline void bitonicSortKeys(
 // dimension as the innermost dim, such that we can get the particular slice for
 // a Tensor via its linear block dimension * the slice size.
 template <typename T, unsigned int Power2Size>
+#if defined(CUDA_VERSION) && CUDA_VERSION >= 11070
+__launch_bounds__(1024, 1)
+#endif
 __global__ void compute_mode(
-    T* input,
+    const T* input,
     at::cuda::detail::TensorInfo<T, unsigned int> values,
     at::cuda::detail::TensorInfo<int64_t, unsigned int> indices,
     int64_t sliceSize,
@@ -229,10 +231,10 @@ __global__ void compute_mode(
 
   // Each thread loads up to two elements from the Tensor into shared memory
   if (tidx < sliceSize) {
-    smem[tidx] = input[linearOffset + tidx];
+    smem[tidx] = c10::load(&input[linearOffset + tidx]);
   }
   if (stidx < sliceSize) {
-    smem[stidx] = input[linearOffset + stidx];
+    smem[stidx] = c10::load(&input[linearOffset + stidx]);
   }
 
   // Next, we initialize a boolean region of the buffer, offset by the loaded
@@ -393,11 +395,11 @@ __global__ void compute_mode(
   unsigned mode_index[2] = {0u, 0u};
   if (tidx * 2 < sliceSize) {
     const unsigned idx = tidx * 2;
-    mode_index[0] = input[linearOffset + idx] == mode ? idx : 0u;
+    mode_index[0] = c10::load(&input[linearOffset + idx]) == mode ? idx : 0u;
   }
   if (tidx * 2 + 1 < sliceSize) {
     const unsigned idx = tidx * 2 + 1;
-    mode_index[1] = input[linearOffset + idx] == mode ? idx : 0u;
+    mode_index[1] = c10::load(&input[linearOffset + idx]) == mode ? idx : 0u;
   }
 
   struct MaxIndexOp {
@@ -428,5 +430,4 @@ __global__ void compute_mode(
   }
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native

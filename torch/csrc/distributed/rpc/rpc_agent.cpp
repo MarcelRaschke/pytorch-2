@@ -1,11 +1,42 @@
 #include <c10/util/DeadlockDetection.h>
 #include <torch/csrc/distributed/rpc/rpc_agent.h>
 
-namespace torch {
-namespace distributed {
-namespace rpc {
+namespace torch::distributed::rpc {
 
-constexpr size_t WorkerInfo::MAX_NAME_LEN;
+RegisterWorkerInfoOnce::RegisterWorkerInfoOnce() {
+  // WorkerInfo needs to be registered exactly once. Since the op registration
+  // happens in libtorch_python we wrap the class registration in a helper to
+  // make sure that if there's multiple copies of Python such as used in
+  // torch::deploy we only ever register it once.
+  static auto workerInfo = torch::class_<WorkerInfo>("dist_rpc", "WorkerInfo")
+                               .def(torch::init<std::string, int64_t>());
+}
+
+WorkerInfo::WorkerInfo(std::string name, int64_t id)
+    : WorkerInfo(std::move(name), (worker_id_t)id) {
+  TORCH_CHECK(
+      id <= std::numeric_limits<worker_id_t>::max(),
+      "RPC worker id ",
+      id,
+      " out of bound of int16_t.");
+}
+
+WorkerInfo::WorkerInfo(std::string name, worker_id_t id)
+    : name_(std::move(name)), id_(id) {
+  bool validSize = name_.length() < MAX_NAME_LEN && !name_.empty();
+  bool validChar =
+      std::find_if(name_.begin(), name_.end(), [](char c) {
+        return !(std::isalnum(c) || c == '-' || c == '_' || c == ':');
+      }) == name_.end();
+  TORCH_CHECK(
+      validSize && validChar,
+      "Worker name must match ^[A-Za-z0-9-_:]*$, "
+      "and must be non-empty and shorter than ",
+      MAX_NAME_LEN,
+      " chars, "
+      "but got ",
+      name_);
+}
 
 // Large Time Duration for waiting on the condition variable until the map is
 // population. Cannot use
@@ -143,7 +174,7 @@ void RpcAgent::retryExpiredRpcs() {
     }
 
     // If there are no more RPC's set to be retried at the current timepoint,
-    // we can remove the corresponsing unordered_set from the retry map.
+    // we can remove the corresponding unordered_set from the retry map.
     if (earliestRpcList.empty()) {
       rpcRetryMap_.erase(earliestTimeout);
     }
@@ -188,10 +219,6 @@ void RpcAgent::rpcRetryCallback(
       // If the RPC Agent has shutdown, we cannot retry messages. Thus we mark
       // the future with an error since the RPC was never completed
       // successfully.
-      std::string errorMessage = c10::str(
-          "RPC Agent is no longer running on Node ",
-          RpcAgent::getWorkerInfo().id_,
-          ". Cannot retry message.");
       earliestRpc->originalFuture_->setError(jitFuture.exception_ptr());
     } else if (earliestRpc->retryCount_ < earliestRpc->options_.maxRetries) {
       // If the previous future completed with an error and we haven't
@@ -302,6 +329,4 @@ std::ostream& operator<<(std::ostream& os, const WorkerInfo& workerInfo) {
             << ", name=" << workerInfo.name_ << ")";
 }
 
-} // namespace rpc
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::rpc

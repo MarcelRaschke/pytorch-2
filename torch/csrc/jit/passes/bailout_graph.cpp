@@ -10,9 +10,9 @@
 #include <torch/csrc/jit/passes/liveness.h>
 #include <memory>
 #include <unordered_set>
+#include <utility>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 static bool shouldBeCapturedInByBailOut(Node* n) {
   return n->kind() != prim::Constant;
@@ -102,7 +102,7 @@ struct BailOutGraphBuilderForNode {
       } else if (outer_node->kind() == prim::If) {
         buildBailOutIf(b->outputs(), outer_node);
       } else {
-        AT_ERROR("Unexpected outer node");
+        TORCH_CHECK(false, "Unexpected outer node");
       }
     }
   }
@@ -222,7 +222,7 @@ struct BailOutGraphBuilderForNode {
 // version of an original graph from a particular point
 struct BailOutInserter {
   explicit BailOutInserter(std::shared_ptr<Graph> graph)
-      : graph_(std::move(graph)), bailout_index_(0) {}
+      : graph_(std::move(graph)) {}
 
   void run() {
     liveness_sets_ = BuildLivenessSets(graph_);
@@ -243,7 +243,7 @@ struct BailOutInserter {
 
     // Returns an int so that we have an easy way to do graph traversal
     unopt_func->output()->setType(IntType::get());
-    unopt_func->g_(attr::Subgraph, unoptimized_graph);
+    unopt_func->g_(attr::Subgraph, std::move(unoptimized_graph));
     for (auto bn : bailouts_) {
       bn->insertInput(0, unopt_func->output());
     }
@@ -321,7 +321,7 @@ struct BailOutInserter {
 
   std::shared_ptr<Graph> graph_;
   std::map<Node*, Node*> subgraphs;
-  std::size_t bailout_index_;
+  std::size_t bailout_index_{0};
   std::unordered_map<Node*, std::vector<Value*>> liveness_sets_;
   std::vector<Node*> bailouts_;
   std::map<Value*, Value*> replacements_;
@@ -393,5 +393,4 @@ TORCH_API std::shared_ptr<Graph> BuildBailOutGraphFrom(
   return bailout_graph;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

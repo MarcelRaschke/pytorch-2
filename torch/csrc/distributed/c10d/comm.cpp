@@ -1,10 +1,10 @@
-#include <c10d/comm.hpp>
+#include <torch/csrc/distributed/c10d/comm.hpp>
 
 #include <deque>
 
 #include <ATen/core/functional.h>
 #include <c10/util/irange.h>
-#include <c10d/reducer.hpp>
+#include <torch/csrc/distributed/c10d/reducer.hpp>
 #include <torch/csrc/utils/tensor_flatten.h>
 
 namespace c10d {
@@ -30,8 +30,14 @@ class BroadcastWork {
     auto output_tensors = torch::utils::unflatten_dense_tensors(
         flat_tensor_.front(), bucket_tensors_);
     TORCH_INTERNAL_ASSERT(output_tensors.size() == bucket_tensors_.size());
-    for(const auto i : c10::irange(output_tensors.size())) {
-      bucket_tensors_[i].copy_(output_tensors[i], /*non_blocking=*/true);
+    for (const auto i : c10::irange(output_tensors.size())) {
+      // if output_tensor is empty, no need to copy it back,
+      // this can avoid error when both bucket_tensor and output_tensor
+      // are empty, but they have different shapes, see
+      // https://github.com/pytorch/pytorch/issues/87280
+      if (output_tensors[i].numel() != 0) {
+        bucket_tensors_[i].copy_(output_tensors[i], /*non_blocking=*/true);
+      }
     }
   }
 
@@ -47,22 +53,21 @@ class BroadcastWork {
 
  private:
   // The broadcast work that is kicked off upon construction.
-  c10::intrusive_ptr<c10d::ProcessGroup::Work> work_;
+  c10::intrusive_ptr<c10d::Work> work_;
 };
 
 } // namespace
 
 // Broadcast many tensors to all processes in the process group.
 void broadcast_coalesced(
-    c10::intrusive_ptr<c10d::ProcessGroup> process_group,
+    const c10::intrusive_ptr<c10d::ProcessGroup>& process_group,
     at::TensorList tensors,
     size_t buffer_size,
     int rank) {
   // Coalesce tensors into buckets taking into account the maximum buffer size.
   // This routine is multi-device aware, so the tensors can be split across
   // multiple devices and can contain a mix of CPU and CUDA tensors.
-  std::vector<std::vector<size_t>> buckets;
-  std::tie(buckets, std::ignore) =
+  auto [buckets, _] =
       compute_bucket_assignment_by_size(tensors.vec(), {buffer_size});
 
   // Returns tensor at specified index in input tensor list.
@@ -98,5 +103,26 @@ std::vector<at::Tensor> GradBucket::getGradients() const {
   }
   return per_parameter_tensors;
 }
+namespace detail {
+
+at::Tensor parseCppCommHookResult(const c10::IValue& result) {
+  if (result.isPyObject()) {
+    std::vector<at::Tensor> tensors =
+        result.toPyObjectHolder()->extractTensors();
+    return tensors[0];
+  }
+  TORCH_INTERNAL_ASSERT(
+      result.isTensor() || result.isTensorList(),
+      "expected the hook result is either a Tensor or a TensorList found ",
+      result.tagKind());
+
+  if (result.isTensor()) {
+    return result.toTensor();
+  }
+
+  return result.toTensorVector()[0];
+}
+
+} // namespace detail
 
 } // namespace c10d

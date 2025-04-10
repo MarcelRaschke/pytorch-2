@@ -8,8 +8,7 @@
 #include <torch/csrc/jit/serialization/import_export_functions.h>
 #include <torch/custom_class_detail.h>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 OpCode parseOpCode(const char* str);
 using c10::IValue;
 
@@ -24,7 +23,7 @@ IValue expect_field(
       expected_name,
       " found ",
       row->elements().at(0).toStringRef());
-  return std::move(row->elements().at(1));
+  return std::move(row)->elements().at(1);
 }
 
 namespace mobile {
@@ -69,16 +68,15 @@ class OpCodeCache {
 } // namespace
 
 void applyUpgrader(mobile::Function* function, uint64_t operator_version) {
-  const Code& code = function->get_code();
+  Code& code = function->get_code();
   auto& operator_version_map = getOperatorVersionMapForMobile();
-  for (size_t i = 0; i < function->get_code().instructions_.size(); i++) {
-    Instruction& inst = function->get_code().instructions_[i];
+  for (size_t i = 0; i < code.instructions_.size(); i++) {
+    Instruction& inst = code.instructions_[i];
     if (inst.op == OpCode::OP) {
-      std::string op_name = function->get_code().op_names_[inst.X].name;
-      std::string operator_name = function->get_code().op_names_[inst.X].name +
-          (function->get_code().op_names_[inst.X].overload_name.empty()
+      std::string operator_name = code.op_names_[inst.X].name +
+          (code.op_names_[inst.X].overload_name.empty()
                ? ""
-               : "." + function->get_code().op_names_[inst.X].overload_name);
+               : "." + code.op_names_[inst.X].overload_name);
 
       auto it = operator_version_map.find(operator_name);
       // Find out if there is an upgrader for this operator
@@ -89,8 +87,8 @@ void applyUpgrader(mobile::Function* function, uint64_t operator_version) {
         // algorithm, because the number of upgrader per operator will be just a
         // few and tend to keep the code light-weight from binary size concern.
         for (const auto& upgrader : upgrader_list) {
-          if (operator_version <= upgrader.max_version &&
-              operator_version >= upgrader.min_version) {
+          if (static_cast<int>(operator_version) <= upgrader.max_version &&
+              static_cast<int>(operator_version) >= upgrader.min_version) {
             // If there exists a valid upgrader, change the instruction OP to
             // CALL, and the index will point to the according upgrader
             // function. All upgrader function are available in
@@ -102,11 +100,11 @@ void applyUpgrader(mobile::Function* function, uint64_t operator_version) {
             // new_inst.X = upgrader.index;
             // code->instructions_[i] = new_inst;
             TORCH_CHECK(
-                upgrader.index < function->get_code().functions_.size(),
+                upgrader.index < static_cast<int>(code.functions_.size()),
                 "upgrader index is, ",
                 upgrader.index,
                 " and it's larger than the upgrader function list length ",
-                function->get_code().functions_.size());
+                code.functions_.size());
             inst.op = OpCode::CALL;
             inst.X = upgrader.index;
           }
@@ -156,8 +154,8 @@ void parseInstructions(
         "There should be three parts in an instruction. The function name is ",
         function_name);
     OpCode op_code = opCodeCache.parse(*ins_item[0].toString());
-    int X = ins_item[1].toInt();
-    int N = ins_item[2].toInt();
+    auto X = ins_item[1].toInt();
+    auto N = ins_item[2].toInt();
 
     if (!debug_handles_list.empty()) {
       int64_t debug_handle = debug_handles_list[j];
@@ -181,7 +179,7 @@ void parseTypes(
   std::vector<std::string> types_string_list;
   types_string_list.resize(types_list.size());
   for (size_t i = 0; i < types_list.size(); i++) {
-    types_string_list[i] = types_list[i].toString()->string();
+    types_string_list[i] = types_list[i].toStringRef();
   }
 
   std::vector<c10::TypePtr> types_ptr_list = c10::parseType(types_string_list);
@@ -195,5 +193,4 @@ void parseRegisterSize(size_t rsize, mobile::Function* function) {
 }
 
 } // namespace mobile
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

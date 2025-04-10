@@ -11,12 +11,12 @@ namespace at {
 
   // TODO: add a note explaining the design decisions
   // ZeroTensors are designed to be immutable. Thus, we error out when an in-place operation is performed on ZeroTensors
-  void zeroTensorFallback(const c10::OperatorHandle& op, DispatchKeySet dispatch_keys, torch::jit::Stack* stack) {
+  static void zeroTensorFallback(const c10::OperatorHandle& op, DispatchKeySet dispatch_keys, torch::jit::Stack* stack) {
     const auto& arguments = op.schema().arguments();
     const auto num_arguments = arguments.size();
     const auto stack_start = stack->size() - num_arguments;
 
-    c10::optional<bool> is_write;
+    std::optional<bool> is_write;
     for (const auto i : c10::irange(num_arguments)) {
       const auto& alias_info = arguments[i].alias_info();
       if (alias_info != nullptr) {
@@ -99,6 +99,7 @@ namespace at {
     // do not use the fallback.
     // m.impl("mul.Tensor", torch::CppFunction::makeFallthrough());
     // m.impl("add.Tensor", torch::CppFunction::makeFallthrough());
+    // m.impl("linalg_cross", torch::CppFunction::makeFallthrough());
 
     TORCH_VIEW_FNS(m)
     TENSOR_UTILITIES_AND_CONSTRUCTORS(m)

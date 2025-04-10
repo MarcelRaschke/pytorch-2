@@ -26,54 +26,184 @@ TEST(MemDependency, BoundOverlap) {
   };
 
   // Sanity check 3 overlap cases.
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(0, 0), CB(0, 0)));
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(0, 3), CB(2, 5)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(0, 0), CB(1, 1)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(0, 0), CB(0, 0)));
+  ASSERT_EQ(OverlapKind::PartialOverlap, boundOverlap(CB(0, 3), CB(2, 5)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(0, 0), CB(1, 1)));
 
   // Partial overlap works in either order.
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(0, 10), CB(7, 14)));
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(7, 14), CB(0, 10)));
+  ASSERT_EQ(OverlapKind::PartialOverlap, boundOverlap(CB(0, 10), CB(7, 14)));
+  ASSERT_EQ(OverlapKind::PartialOverlap, boundOverlap(CB(7, 14), CB(0, 10)));
 
   // Total Overlap works when one bound encloses the other, and returns which.
-  ASSERT_EQ(Contains, boundOverlap(CB(2, 15), CB(7, 9)));
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(2, 15), CB(0, 16)));
+  ASSERT_EQ(OverlapKind::Contains, boundOverlap(CB(2, 15), CB(7, 9)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(2, 15), CB(0, 16)));
 
   // Total overlap works when the bounds are an identical range, returns
   // ContainedOrEqual.
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(2, 15), CB(2, 15)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(2, 15), CB(2, 15)));
 
   // Total overlap when only one end of the bound matches.
-  ASSERT_EQ(Contains, boundOverlap(CB(2, 15), CB(2, 10)));
-  ASSERT_EQ(Contains, boundOverlap(CB(2, 15), CB(3, 15)));
-  ASSERT_EQ(Contains, boundOverlap(CB(0, 10), CB(0, 9)));
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(2, 10), CB(2, 15)));
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(3, 15), CB(2, 15)));
+  ASSERT_EQ(OverlapKind::Contains, boundOverlap(CB(2, 15), CB(2, 10)));
+  ASSERT_EQ(OverlapKind::Contains, boundOverlap(CB(2, 15), CB(3, 15)));
+  ASSERT_EQ(OverlapKind::Contains, boundOverlap(CB(0, 10), CB(0, 9)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(2, 10), CB(2, 15)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(3, 15), CB(2, 15)));
 
   // No overlap when a < b.
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(0, 2), CB(5, 10)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(2, 2), CB(3, 3)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(100, 120), CB(130, 130)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(0, 2), CB(5, 10)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(2, 2), CB(3, 3)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(100, 120), CB(130, 130)));
 
   // No overlap when a > b.
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(5, 10), CB(0, 2)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(3, 3), CB(2, 2)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(130, 130), CB(100, 120)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(5, 10), CB(0, 2)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(3, 3), CB(2, 2)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(130, 130), CB(100, 120)));
 
   // No overlap when adjacent.
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(0, 100), CB(101, 120)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(2, 3), CB(0, 1)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(0, 100), CB(101, 120)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(2, 3), CB(0, 1)));
 
   // Partial overlap when middle bounds match.
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(0, 100), CB(100, 120)));
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(0, 2), CB(2, 4)));
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(100, 120), CB(0, 100)));
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(2, 3), CB(1, 2)));
+  ASSERT_EQ(
+      OverlapKind::PartialOverlap, boundOverlap(CB(0, 100), CB(100, 120)));
+  ASSERT_EQ(OverlapKind::PartialOverlap, boundOverlap(CB(0, 2), CB(2, 4)));
+  ASSERT_EQ(
+      OverlapKind::PartialOverlap, boundOverlap(CB(100, 120), CB(0, 100)));
+  ASSERT_EQ(OverlapKind::PartialOverlap, boundOverlap(CB(2, 3), CB(1, 2)));
 
   // Total overlap when one bound is single length over one end of the other.
-  ASSERT_EQ(Contains, boundOverlap(CB(2, 15), CB(15, 15)));
-  ASSERT_EQ(Contains, boundOverlap(CB(2, 15), CB(2, 2)));
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(2, 2), CB(2, 15)));
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(15, 15), CB(2, 15)));
+  ASSERT_EQ(OverlapKind::Contains, boundOverlap(CB(2, 15), CB(15, 15)));
+  ASSERT_EQ(OverlapKind::Contains, boundOverlap(CB(2, 15), CB(2, 2)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(2, 2), CB(2, 15)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(15, 15), CB(2, 15)));
+}
+
+TEST(MemDependency, BoundComparison) {
+  using namespace analysis;
+
+  auto CB = [](int s, int e) {
+    return Bound(alloc<IntImm>(s), alloc<IntImm>(e));
+  };
+
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(10, 100), CB(10, 100), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(10, 10), CB(10, 10), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(10, 20), CB(30, 40), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(30, 40), CB(10, 20), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(40, 50), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(20, 30), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 45), CB(40, 50), CompareSelectOperation::kEQ));
+
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(10, 100), CB(10, 100), CompareSelectOperation::kNE));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(10, 10), CB(10, 10), CompareSelectOperation::kNE));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(10, 20), CB(30, 40), CompareSelectOperation::kNE));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(30, 40), CB(10, 20), CompareSelectOperation::kNE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(40, 50), CompareSelectOperation::kNE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(20, 30), CompareSelectOperation::kEQ));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 45), CB(40, 50), CompareSelectOperation::kNE));
+
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(10, 20), CB(30, 40), CompareSelectOperation::kLT));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(30, 40), CB(10, 20), CompareSelectOperation::kLT));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(30, 40), CB(10, 30), CompareSelectOperation::kLT));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(10, 100), CB(10, 100), CompareSelectOperation::kLT));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(40, 50), CompareSelectOperation::kLT));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 45), CB(40, 50), CompareSelectOperation::kLT));
+
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(10, 20), CB(30, 40), CompareSelectOperation::kGE));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(30, 40), CB(10, 20), CompareSelectOperation::kGE));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(30, 40), CB(10, 30), CompareSelectOperation::kGE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(10, 100), CB(10, 100), CompareSelectOperation::kGE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(40, 50), CompareSelectOperation::kGE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 45), CB(40, 50), CompareSelectOperation::kGE));
+
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(10, 20), CB(30, 40), CompareSelectOperation::kGT));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(30, 40), CB(40, 50), CompareSelectOperation::kGT));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(10, 100), CB(10, 100), CompareSelectOperation::kGT));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(30, 40), CB(10, 20), CompareSelectOperation::kGT));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(10, 30), CompareSelectOperation::kGT));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 45), CB(40, 50), CompareSelectOperation::kGT));
+
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(10, 20), CB(30, 40), CompareSelectOperation::kLE));
+  ASSERT_EQ(
+      CmpEvalResult::True,
+      compareBound(CB(30, 40), CB(40, 50), CompareSelectOperation::kLE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(10, 100), CB(10, 100), CompareSelectOperation::kLE));
+  ASSERT_EQ(
+      CmpEvalResult::False,
+      compareBound(CB(30, 40), CB(10, 20), CompareSelectOperation::kLE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 40), CB(10, 30), CompareSelectOperation::kLE));
+  ASSERT_EQ(
+      CmpEvalResult::NotDetermined,
+      compareBound(CB(30, 45), CB(40, 50), CompareSelectOperation::kLE));
 }
 
 TEST(MemDependency, BoundOverlapSymbolic) {
@@ -91,22 +221,30 @@ TEST(MemDependency, BoundOverlapSymbolic) {
   // Sanity check cases where the start and end is symbolic but the diff is
   // constant.
   // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(x, x), CB(x, x)));
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(x, x + 3), CB(x + 2, x + 5)));
-  ASSERT_EQ(NoOverlap, boundOverlap(CB(x, x), CB(x + 1, x + 1)));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, boundOverlap(CB(x, x), CB(x, x)));
+  ASSERT_EQ(
+      OverlapKind::PartialOverlap,
+      boundOverlap(CB(x, x + 3), CB(x + 2, x + 5)));
+  ASSERT_EQ(OverlapKind::NoOverlap, boundOverlap(CB(x, x), CB(x + 1, x + 1)));
 
   // We can't infer the sign of y, so cannot tell whether adding y is larger or
   // smaller than y/2.
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(x, x + y), CB(x, x + y / 2)));
+  ASSERT_EQ(
+      OverlapKind::PartialOverlap,
+      boundOverlap(CB(x, x + y), CB(x, x + y / 2)));
 
   // No information about this bound, have to take the most conservative option:
   // there may be an overlap.
-  ASSERT_EQ(PartialOverlap, boundOverlap(CB(x, y), CB(z, w)));
+  ASSERT_EQ(OverlapKind::PartialOverlap, boundOverlap(CB(x, y), CB(z, w)));
 
   // Math on opaque terms works.
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(x + w, y - z), CB(x + w, y - z)));
+  ASSERT_EQ(
+      OverlapKind::ContainedOrEqual,
+      boundOverlap(CB(x + w, y - z), CB(x + w, y - z)));
   // Even requiring simplification.
-  ASSERT_EQ(ContainedOrEqual, boundOverlap(CB(x - w - w, y), CB(x - w * 2, y)));
+  ASSERT_EQ(
+      OverlapKind::ContainedOrEqual,
+      boundOverlap(CB(x - w - w, y), CB(x - w * 2, y)));
 }
 
 // Tests the helper function for overlap of multi dimensional indices bounds.
@@ -120,63 +258,64 @@ TEST(MemDependency, BoundOverlapMultiDim) {
   };
 
   // Sanity check one dimensional cases.
-  ASSERT_EQ(ContainedOrEqual, overlaps({CB(0, 0)}, {CB(0, 0)}));
-  ASSERT_EQ(NoOverlap, overlaps({CB(0, 2)}, {CB(5, 10)}));
-  ASSERT_EQ(PartialOverlap, overlaps({CB(0, 100)}, {CB(100, 120)}));
+  ASSERT_EQ(OverlapKind::ContainedOrEqual, overlaps({CB(0, 0)}, {CB(0, 0)}));
+  ASSERT_EQ(OverlapKind::NoOverlap, overlaps({CB(0, 2)}, {CB(5, 10)}));
+  ASSERT_EQ(
+      OverlapKind::PartialOverlap, overlaps({CB(0, 100)}, {CB(100, 120)}));
 
   // Total overlap in 3 dims.
   ASSERT_EQ(
-      ContainedOrEqual,
+      OverlapKind::ContainedOrEqual,
       overlaps({CB(0, 2), CB(0, 5), CB(0, 4)}, {CB(0, 2), CB(0, 5), CB(0, 4)}));
   ASSERT_EQ(
-      ContainedOrEqual,
+      OverlapKind::ContainedOrEqual,
       overlaps(
           {CB(0, 2), CB(0, 5), CB(0, 4)}, {CB(0, 2), CB(0, 5), CB(0, 10)}));
 
   // Total overlap in 2 dims, no overlap in another.
   ASSERT_EQ(
-      NoOverlap,
+      OverlapKind::NoOverlap,
       overlaps(
           {CB(0, 2), CB(0, 5), CB(0, 4)}, {CB(0, 2), CB(0, 5), CB(5, 10)}));
 
   // Total overlap in 2 dims, partial overlap in another.
   ASSERT_EQ(
-      PartialOverlap,
+      OverlapKind::PartialOverlap,
       overlaps(
           {CB(0, 2), CB(0, 5), CB(0, 5)}, {CB(0, 2), CB(0, 5), CB(5, 10)}));
   // This case is most important, so verify the overlap in any dim. (dim 2)
   ASSERT_EQ(
-      PartialOverlap,
+      OverlapKind::PartialOverlap,
       overlaps({CB(0, 2), CB(0, 5), CB(0, 5)}, {CB(0, 2), CB(2, 6), CB(0, 5)}));
   // Dim 1.
   ASSERT_EQ(
-      PartialOverlap,
+      OverlapKind::PartialOverlap,
       overlaps({CB(0, 2), CB(0, 5), CB(0, 5)}, {CB(1, 3), CB(0, 5), CB(0, 5)}));
   // Total overlap in 1 dim, partial in 2.
   ASSERT_EQ(
-      PartialOverlap,
+      OverlapKind::PartialOverlap,
       overlaps(
           {CB(0, 2), CB(0, 5), CB(0, 5)}, {CB(2, 6), CB(0, 5), CB(5, 10)}));
   // Total overlap, partial overlap, no overlap.
   ASSERT_EQ(
-      NoOverlap,
+      OverlapKind::NoOverlap,
       overlaps(
           {CB(0, 2), CB(0, 5), CB(0, 5)}, {CB(2, 6), CB(11, 15), CB(0, 5)}));
 
   // Total overlap (B) in 2 dims, total overlap (A) in another.
   ASSERT_EQ(
-      Contains,
+      OverlapKind::Contains,
       overlaps({CB(0, 2), CB(0, 5), CB(0, 4)}, {CB(0, 2), CB(0, 3), CB(0, 4)}));
 
   // Total overlap (A) in 2 dims, total overlap (B) in another.
   ASSERT_EQ(
-      Contains,
+      OverlapKind::Contains,
       overlaps(
           {CB(0, 12), CB(0, 15), CB(0, 4)}, {CB(0, 2), CB(0, 3), CB(0, 14)}));
 
   // Total (B), No Overlap, Total (A).
   ASSERT_EQ(
-      NoOverlap,
+      OverlapKind::NoOverlap,
       overlaps(
           {CB(0, 2), CB(0, 5), CB(0, 5)}, {CB(0, 6), CB(11, 15), CB(1, 2)}));
 }
@@ -274,7 +413,7 @@ TEST(MemDependency, BoundSubtractMultiDim) {
     if (x.size() != y.size()) {
       return false;
     }
-    for (auto i = 0; i < x.size(); ++i) {
+    for (auto i = 0U; i < x.size(); ++i) {
       if (!indexBoundsEquals(x[i], y[i])) {
         return false;
       }
@@ -338,7 +477,7 @@ TEST(MemDependency, BoundSubtractMultiDimSymbolic) {
     if (x.size() != y.size()) {
       return false;
     }
-    for (auto i = 0; i < x.size(); ++i) {
+    for (auto i = 0U; i < x.size(); ++i) {
       if (!indexBoundsEquals(x[i], y[i])) {
         return false;
       }
@@ -555,7 +694,7 @@ TEST(MemDependency, MemDependencyCheckerLoopReduce) {
   // B -> A.
   ASSERT_TRUE(analyzer.dependsDirectly(bStore, aReduce));
 
-  // B depends indirectly on the intializer of A, since the reduction depends
+  // B depends indirectly on the initializer of A, since the reduction depends
   // on it.
   ASSERT_FALSE(analyzer.dependsDirectly(bStore, aInit));
   ASSERT_TRUE(analyzer.dependsIndirectly(bStore, aInit));
@@ -612,7 +751,7 @@ TEST(MemDependency, MemDependencyCheckerLoopReduceExpanded) {
   // B -> A.
   ASSERT_TRUE(analyzer.dependsDirectly(bStore, aReduce));
 
-  // B depends indirectly on the intializer of A, since the reduction depends
+  // B depends indirectly on the initializer of A, since the reduction depends
   // on it.
   ASSERT_FALSE(analyzer.dependsDirectly(bStore, aInit));
   ASSERT_TRUE(analyzer.dependsIndirectly(bStore, aInit));
@@ -1038,7 +1177,7 @@ TEST(MemDependency, MemDependencyCheckerLoopBoundsIndexShift) {
   // The seventh access is the store to A[9 - x] in the third loop.
   ASSERT_EQ(history[6]->type(), AccessType::Store);
   ASSERT_EQ(history[6]->var(), aVar);
-  // This store has a negative stride on it's indices, but is notmalized
+  // This store has a negative stride on it's indices, but is normalized
   // internally.
   ASSERT_TRUE(EQ(history[6]->bounds(), {CB(1, 9)}));
 
@@ -1046,7 +1185,7 @@ TEST(MemDependency, MemDependencyCheckerLoopBoundsIndexShift) {
   ASSERT_EQ(history[7]->type(), AccessType::Load);
   ASSERT_EQ(history[7]->var(), aVar);
   // It has the bounds of the loop (0 <= x < 9), modified by the offset 9 - x,
-  // which esstentially traverses the loop backwards.
+  // which essentially traverses the loop backwards.
   ASSERT_TRUE(EQ(history[7]->bounds(), {CB(0, 9)}));
   // This Load has three write dependencies:
   ASSERT_EQ(history[7]->dependencies().size(), 3);
@@ -1062,11 +1201,11 @@ TEST(MemDependency, MemDependencyCheckerLoopBoundsIndexShift) {
   // The ninth access is the store to A[x] in the fourth loop.
   ASSERT_EQ(history[8]->type(), AccessType::Store);
   ASSERT_EQ(history[8]->var(), aVar);
-  // This store has a negative stride on it's indices, but is notmalized
+  // This store has a negative stride on it's indices, but is normalized
   // internally.
   ASSERT_TRUE(EQ(history[8]->bounds(), {CB(0, 9)}));
 
-  // The tenth and 11th acceses are the copy from A[x] to B[x].
+  // The tenth and 11th accesses are the copy from A[x] to B[x].
   ASSERT_EQ(history[9]->type(), AccessType::Load);
   ASSERT_EQ(history[9]->var(), aVar);
   ASSERT_EQ(history[10]->type(), AccessType::Store);
@@ -1169,7 +1308,7 @@ TEST(MemDependency, MemDependencyCheckerLoopSelfDependency) {
      * }
      */
 
-    // Is not self dependent beacause there is no store to the buffer that is
+    // Is not self dependent because there is no store to the buffer that is
     // read.
 
     MemDependencyChecker analyzer;
@@ -1387,8 +1526,8 @@ TEST(MemDependency, MemDependencyCheckerLoopSelfDependency) {
 
     // Here we can use the common stride of the accesses to determine they are
     // distinct.
-    // Note, this is the only place (loop self depedency) we use this stride
-    // to avoid unnecessary depedence.
+    // Note, this is the only place (loop self dependency) we use this stride
+    // to avoid unnecessary dependence.
 
     MemDependencyChecker analyzer;
     // Execution order doesn't matter since the read and the write are totally
@@ -1585,7 +1724,7 @@ TEST(MemDependency, MemDependencyCheckerLoopSelfDependency) {
      * }
      */
 
-    // If they have strides with no common muliple > 1, they overlap.
+    // If they have strides with no common multiple > 1, they overlap.
     MemDependencyChecker analyzer;
     StmtPtr stmt = For::make(
         x, 0, 10, Store::make(a, {x * 2}, Load::make(a, {x * 3 + 1})));
@@ -1723,8 +1862,8 @@ TEST(MemDependency, MemDependencyCheckerLoopSelfDependency) {
 }
 
 // Verify that a strided access still works.
-// TODO: actually this only works because of the size of the ranges, revist this
-// test after strided overlap is implemented.
+// TODO: actually this only works because of the size of the ranges, revisit
+// this test after strided overlap is implemented.
 TEST(MemDependency, MemDependencyCheckerLoopDistinctStrides) {
   BufHandle a("A", {20}, kInt);
   BufHandle b("B", {20}, kInt);
@@ -2061,7 +2200,7 @@ TEST(MemDependency, MemDependencyCheckerIfThenElse) {
     // In this case C is dependent on both A and B.
 
     // TODO: in cases like this it would be possible to split the range of B
-    // into two bounds, one dependent on A and one depenent on B. We'd need to
+    // into two bounds, one dependent on A and one dependent on B. We'd need to
     // examine conditions relative to previously encountered loop variables. I'm
     // uncertain if this would be helpful.
 
@@ -2110,7 +2249,7 @@ TEST(MemDependency, MemDependencyCheckerCutLoop) {
     // Output depends on input.
     ASSERT_TRUE(analyzer.dependsIndirectly(b.node(), a.node()));
 
-    // Output has 2 depdenencies.
+    // Output has 2 dependencies.
     auto outputAccess = analyzer.output(b.node());
     ASSERT_NE(outputAccess, nullptr);
     ASSERT_EQ(outputAccess->dependencies().size(), 2);
@@ -2150,7 +2289,7 @@ TEST(MemDependency, MemDependencyCheckerCutLoop) {
     // Output depends on input.
     ASSERT_TRUE(analyzer.dependsIndirectly(b.node(), a.node()));
 
-    // Output has 4 depdenencies.
+    // Output has 4 dependencies.
     auto outputAccess = analyzer.output(b.node());
     ASSERT_NE(outputAccess, nullptr);
     ASSERT_EQ(outputAccess->dependencies().size(), 4);

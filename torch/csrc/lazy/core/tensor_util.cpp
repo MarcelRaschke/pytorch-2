@@ -6,21 +6,16 @@
 #include <c10/util/irange.h>
 #include <torch/csrc/lazy/backend/backend_device.h>
 #include <torch/csrc/lazy/backend/backend_interface.h>
+#include <torch/csrc/lazy/core/config.h>
 #include <torch/csrc/lazy/core/helpers.h>
 
-#include <algorithm>
 #include <cstring>
-#include <functional>
-#include <list>
-#include <numeric>
-#include <thread>
 
-namespace torch {
-namespace lazy {
+namespace torch::lazy {
 
 std::vector<int64_t> ComputeArrayStrides(c10::ArrayRef<int64_t> sizes) {
   std::vector<int64_t> strides(sizes.size(), 1);
-  for (int64_t i = sizes.size(); i > 1; --i) {
+  for (size_t i = sizes.size(); i > 1; --i) {
     strides[i - 2] = strides[i - 1] * sizes[i - 1];
   }
   return strides;
@@ -57,15 +52,15 @@ std::vector<BackendDataPtr> CreateTensorsData(
 }
 
 bool IsSpecialScalar(const at::Scalar& value) {
-  static bool no_scalars = false;
-  // TODO: need to clean up all the env options
-  // lazy_tensors::sys_util::GetEnvBool("NO_SPECIAL_SCALARS", false);
-  if (!no_scalars && (value.isIntegral(false) || value.isFloatingPoint())) {
+  if (FLAGS_torch_lazy_handle_special_scalars &&
+      (value.isIntegral(false) || value.isFloatingPoint())) {
+    if (FLAGS_torch_lazy_all_numbers_special_scalars) {
+      return true;
+    }
     double scalar_value = value.toDouble();
     return scalar_value == 0.0 || std::fabs(scalar_value) == 1.0;
   }
   return false;
 }
 
-} // namespace lazy
-} // namespace torch
+} // namespace torch::lazy

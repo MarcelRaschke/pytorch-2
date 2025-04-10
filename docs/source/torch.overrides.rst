@@ -2,9 +2,10 @@
 
 torch.overrides
 ---------------
+.. py:module:: torch.overrides
 
 This module exposes various helper functions for the ``__torch_function__``
-protocol. See :ref:`extending-torch` for more detail on the
+protocol. See :ref:`extending-torch-python` for more details on the
 ``__torch_function__`` protocol.
 
 Functions
@@ -13,6 +14,8 @@ Functions
 .. autofunction::  get_ignored_functions
 
 .. autofunction::  get_overridable_functions
+
+.. autofunction::  resolve_name
 
 .. autofunction::  get_testing_overrides
 

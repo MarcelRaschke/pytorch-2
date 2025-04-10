@@ -1,13 +1,14 @@
 #include <torch/csrc/jit/tensorexpr/registerizer.h>
+#include <iostream>
 
-namespace torch {
-namespace jit {
-namespace tensorexpr {
+namespace torch::jit::tensorexpr {
 namespace registerizer {
 
 // AccessInfo
 
-void AccessInfo::addStore(StorePtr store, const std::shared_ptr<Scope>& scope) {
+void AccessInfo::addStore(
+    const StorePtr& store,
+    const std::shared_ptr<Scope>& scope) {
   block_ =
       block_ ? Block::getSharedParent(block_, scope->block()) : scope->block();
 
@@ -26,9 +27,9 @@ void AccessInfo::addStore(StorePtr store, const std::shared_ptr<Scope>& scope) {
 }
 
 void AccessInfo::addLoad(
-    LoadPtr load,
+    const LoadPtr& load,
     const std::shared_ptr<Scope>& scope,
-    StmtPtr usage) {
+    const StmtPtr& usage) {
   block_ =
       block_ ? Block::getSharedParent(block_, scope->block()) : scope->block();
   first_usage_ = first_usage_ ? block_->getEnclosedRoot(first_usage_) : usage;
@@ -53,10 +54,10 @@ void AccessInfo::merge(const std::shared_ptr<AccessInfo>& other) {
           "Expected ranks to match in registerizer in the fuser."));
 
   last_usage_ = other->last_usage();
-  for (auto s : other->stores()) {
+  for (const auto& s : other->stores()) {
     stores_.push_back(s);
   }
-  for (auto l : other->loads()) {
+  for (const auto& l : other->loads()) {
     loads_.push_back(l);
   }
 
@@ -97,9 +98,9 @@ bool AccessInfo::overlaps(const std::shared_ptr<AccessInfo>& other) {
   return overlap;
 }
 
-bool AccessInfo::dependsOnVar(VarPtr v) {
+bool AccessInfo::dependsOnVar(const VarPtr& v) {
   VarFinder vf;
-  for (auto i : indices_) {
+  for (const auto& i : indices_) {
     i->accept(&vf);
   }
 
@@ -117,10 +118,10 @@ std::shared_ptr<AccessInfo> AccessInfo::cloneWithHiddenInfo(
   newInfo->firstUsageOverlapped_ = orig->firstUsageOverlapped_;
   newInfo->store_cost_ = orig->store_cost_;
   newInfo->load_cost_ = orig->load_cost_;
-  for (auto s : orig->stores_) {
+  for (const auto& s : orig->stores_) {
     newInfo->stores_.push_back(s);
   }
-  for (auto s : orig->loads_) {
+  for (const auto& s : orig->loads_) {
     newInfo->loads_.push_back(s);
   }
 
@@ -131,7 +132,7 @@ std::shared_ptr<AccessInfo> AccessInfo::cloneWithHiddenInfo(
 
 void AccessInfo::print() const {
   std::cout << "Access: " << *buf_ << "{";
-  for (auto i : indices_) {
+  for (const auto& i : indices_) {
     std::cout << *i << " ";
   }
   std::cout << "} stores: " << stores_.size() << " (" << *store_cost_ << ") -";
@@ -149,7 +150,7 @@ void Scope::closeAccess(const std::shared_ptr<AccessInfo>& info) {
   closedAccesses_.push_back(info);
 }
 
-AccessHashMap& Scope::getAccessMapByBuf(BufPtr b) {
+AccessHashMap& Scope::getAccessMapByBuf(const BufPtr& b) {
   auto it = openAccesses_.find(b);
   if (it == openAccesses_.end()) {
     // create and return
@@ -189,7 +190,7 @@ void RegisterizerAnalysis::closeAccessIntoScope(
   scope->closeAccess(info);
 }
 
-void RegisterizerAnalysis::visit(ForPtr v) {
+void RegisterizerAnalysis::visit(const ForPtr& v) {
   if (v->loop_options().is_gpu_block_index() ||
       v->loop_options().is_gpu_thread_index()) {
     throw malformed_input(
@@ -237,7 +238,7 @@ void RegisterizerAnalysis::visit(ForPtr v) {
       bool closed = false;
       // If this access depends on a locally scoped variable, it cannot be
       // hosted out of the loop.
-      for (auto v : currentScope_->localVars()) {
+      for (const auto& v : currentScope_->localVars()) {
         if (candidate->dependsOnVar(v)) {
           closeAccessIntoScope(candidate, currentScope_);
           closed = true;
@@ -271,9 +272,9 @@ void RegisterizerAnalysis::visit(ForPtr v) {
 
   // having hoisted, now we can merge normally.
   mergeCurrentScopeIntoParent();
-};
+}
 
-void RegisterizerAnalysis::visit(CondPtr v) {
+void RegisterizerAnalysis::visit(const CondPtr& v) {
   ExprPtr condition = v->condition();
   BlockPtr true_stmt = v->true_stmt();
   BlockPtr false_stmt = v->false_stmt();
@@ -313,7 +314,7 @@ void RegisterizerAnalysis::visit(CondPtr v) {
 // IfThenElses are just like Conds except they are not Stmts, which means no
 // registerization can occur internally. However, the first reference to an
 // access can occur within one if its visible outside the condition.
-void RegisterizerAnalysis::visit(IfThenElsePtr v) {
+void RegisterizerAnalysis::visit(const IfThenElsePtr& v) {
   ExprPtr condition = v->condition();
   ExprPtr true_value = v->true_value();
   ExprPtr false_value = v->false_value();
@@ -348,7 +349,7 @@ void RegisterizerAnalysis::visit(IfThenElsePtr v) {
   }
 }
 
-void RegisterizerAnalysis::visit(LetPtr v) {
+void RegisterizerAnalysis::visit(const LetPtr& v) {
   currentScope_->addLocalVar(v->var());
 
   stmtStack_.push_front(v);
@@ -356,7 +357,7 @@ void RegisterizerAnalysis::visit(LetPtr v) {
   stmtStack_.pop_front();
 }
 
-void RegisterizerAnalysis::visit(BlockPtr v) {
+void RegisterizerAnalysis::visit(const BlockPtr& v) {
   auto prev_scope = currentScope_;
   if (currentScope_->block() != v) {
     currentScope_ = std::make_shared<Scope>(v, prev_scope);
@@ -364,7 +365,7 @@ void RegisterizerAnalysis::visit(BlockPtr v) {
 
   stmtStack_.push_front(v);
 
-  for (auto s : *v) {
+  for (const auto& s : *v) {
     s->accept(this);
     if (currentScope_->block() != v) {
       // merge the inner block's accesses into this Block's accesses.
@@ -384,7 +385,7 @@ void RegisterizerAnalysis::visit(BlockPtr v) {
   }
 }
 
-void RegisterizerAnalysis::visit(StorePtr v) {
+void RegisterizerAnalysis::visit(const StorePtr& v) {
   stmtStack_.push_front(v);
   v->value()->accept(this);
   stmtStack_.pop_front();
@@ -396,7 +397,7 @@ void RegisterizerAnalysis::visit(StorePtr v) {
 
   // hash the Store:
   SimplifierHashType accessHash = hasher_.hash(v->buf());
-  for (auto i : v->indices()) {
+  for (const auto& i : v->indices()) {
     accessHash = hasher_.hash_combine(accessHash, i);
   }
 
@@ -438,14 +439,14 @@ void RegisterizerAnalysis::visit(StorePtr v) {
   }
 }
 
-void RegisterizerAnalysis::visit(LoadPtr v) {
+void RegisterizerAnalysis::visit(const LoadPtr& v) {
   if (v->indices().empty()) {
     // already a scalar.
     return;
   }
   // hash the Load:
   SimplifierHashType accessHash = hasher_.hash(v->buf());
-  for (auto i : v->indices()) {
+  for (const auto& i : v->indices()) {
     accessHash = hasher_.hash_combine(accessHash, i);
   }
 
@@ -487,7 +488,7 @@ void RegisterizerAnalysis::visit(LoadPtr v) {
 }
 
 // Loop and Conditional scopes are different in that it may or may not be
-// possible to hoist the intializer of a scalar variable outside the block
+// possible to hoist the initializer of a scalar variable outside the block
 // depending on if we can tell that the Buffer access is valid outside. This is
 // tricky because the access that demonstrates this may be later in the tree and
 // we haven't encountered it yet.
@@ -525,7 +526,7 @@ void RegisterizerAnalysis::mergeHiddenScope(bool allowClosed) {
 void RegisterizerAnalysis::mergeCurrentScopeIntoParent() {
   auto parent = currentScope_->parent();
 
-  // copy across current closed accceses, merging / closing as necessary
+  // copy across current closed accesses, merging / closing as necessary
   for (auto& candidate : currentScope_->closedAccesses()) {
     auto& parentAccesses = parent->getAccessMapByBuf(candidate->buf());
 
@@ -617,7 +618,7 @@ void RegisterizerAnalysis::mergeCurrentScopeIntoParent() {
 
       // If this access depends on a locally scoped variable, it cannot be
       // lifted out of the loop.
-      for (auto v : currentScope_->localVars()) {
+      for (const auto& v : currentScope_->localVars()) {
         if (candidate->dependsOnVar(v)) {
           closeAccessIntoScope(candidate, parent);
           handled = true;
@@ -650,7 +651,7 @@ std::vector<std::shared_ptr<AccessInfo>> RegisterizerAnalysis::getCandidates() {
 
 // RegisterizerReplacer
 
-ExprPtr RegisterizerReplacer::mutate(LoadPtr v) {
+ExprPtr RegisterizerReplacer::mutate(const LoadPtr& v) {
   auto it = loadToAccess_.find(v);
   if (it == loadToAccess_.end()) {
     // This access cannot be registerized.
@@ -662,9 +663,9 @@ ExprPtr RegisterizerReplacer::mutate(LoadPtr v) {
   return info->replacement().var;
 }
 
-StmtPtr RegisterizerReplacer::mutate(StorePtr v) {
+StmtPtr RegisterizerReplacer::mutate(const StorePtr& v) {
   if (eliminatedIntializers_.count(v) != 0) {
-    // This store is the intializer for a scalar var that is already inserted.
+    // This store is the initializer for a scalar var that is already inserted.
     return nullptr;
   }
 
@@ -684,11 +685,11 @@ StmtPtr RegisterizerReplacer::mutate(StorePtr v) {
   return v;
 }
 
-StmtPtr RegisterizerReplacer::mutate(BlockPtr v) {
+StmtPtr RegisterizerReplacer::mutate(const BlockPtr& v) {
   auto& scope = parentToAccesses_[v];
 
   std::vector<StmtPtr> stmts;
-  for (StmtPtr stmt : v->stmts()) {
+  for (const StmtPtr& stmt : v->stmts()) {
     {
       // Insert the initializer for any Scalars scoped to this block.
       auto it = scope.initializerPoints_.find(stmt);
@@ -733,7 +734,7 @@ void RegisterizerReplacer::buildReplacements() {
   for (auto& info : infoSet_) {
     VarPtr v = alloc<Var>(
         info->buf()->name_hint() + "_" +
-            c10::to_string(getBufferAccessCount(info->buf())),
+            std::to_string(getBufferAccessCount(info->buf())),
         info->buf()->dtype());
 
     info->replacement().var = v;
@@ -743,7 +744,7 @@ void RegisterizerReplacer::buildReplacements() {
         alloc<Buf>(v, std::vector<ExprPtr>({}), info->buf()->dtype());
 
     bool first = true;
-    for (auto s : info->stores()) {
+    for (const auto& s : info->stores()) {
       if (first && info->first_usage() == s && !info->firstUsageOverlapped()) {
         info->replacement().initializer = alloc<Let>(v, s->value());
         eliminatedIntializers_.insert(s);
@@ -754,7 +755,7 @@ void RegisterizerReplacer::buildReplacements() {
       first = false;
     }
 
-    for (auto s : info->loads()) {
+    for (const auto& s : info->loads()) {
       loadToAccess_[s] = info;
     }
 
@@ -795,6 +796,4 @@ StmtPtr registerize(StmtPtr s) {
   return s;
 }
 
-} // namespace tensorexpr
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::tensorexpr

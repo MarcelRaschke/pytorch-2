@@ -1,6 +1,6 @@
 #include <torch/csrc/jit/python/python_ir.h>
 
-#include <aten/src/ATen/core/jit_type.h>
+#include <ATen/core/jit_type.h>
 #include <pybind11/pybind11.h>
 #include <torch/csrc/Device.h>
 #include <torch/csrc/Dtype.h>
@@ -23,8 +23,7 @@
 #include <sstream>
 #include <utility>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // Controls whether graph source ranges are printed by default
 bool global_print_source_ranges = true;
@@ -132,24 +131,24 @@ void ConcretePythonOp::cloneFrom(Node* other_) {
 // recover the autograd.Function instance, if this PythonOp's function
 // was originally SomeFunction.apply
 // used in ONNX for discovering symbolics
-c10::optional<THPObjectPtr> ConcretePythonOp::autogradFunction() const {
+std::optional<THPObjectPtr> ConcretePythonOp::autogradFunction() const {
   pybind11::gil_scoped_acquire gil;
   // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
   py::handle obj = const_cast<PyObject*>(pyobj.get());
 
   auto r = py::getattr(obj, "__self__", py::none());
   if (r.is_none())
-    return c10::nullopt;
+    return std::nullopt;
 
   auto apply = py::getattr(r, "apply", py::none());
   if (apply.is_none())
-    return c10::nullopt;
+    return std::nullopt;
 
   auto c = PyObject_RichCompareBool(apply.ptr(), obj.ptr(), Py_NE);
   if (PyErr_Occurred())
     throw py::error_already_set();
   if (c)
-    return c10::nullopt;
+    return std::nullopt;
 
   return THPObjectPtr(r.release().ptr());
 }
@@ -203,8 +202,17 @@ void initPythonIRBindings(PyObject* module_) {
       .def(
           "has_writers",
           [&](AliasDb& db, Value* v1) { return db.hasWriters(v1); })
-      .def("__str__", &AliasDb::toString);
-
+      .def("__str__", &AliasDb::toString)
+      .def(
+          "move_after_topologically_valid",
+          [](AliasDb& db, Node* n, Node* movePoint) {
+            return db.moveAfterTopologicallyValid(n, movePoint);
+          })
+      .def(
+          "move_before_topologically_valid",
+          [](AliasDb& db, Node* n, Node* movePoint) {
+            return db.moveBeforeTopologicallyValid(n, movePoint);
+          });
 #define GS(name) def(#name, &Graph ::name)
   py::class_<Graph, std::shared_ptr<Graph>>(m, "Graph")
       .def(py::init<>())
@@ -251,29 +259,26 @@ void initPythonIRBindings(PyObject* module_) {
              const std::string& onnx_file_path,
              const NodeAttrNameMap& node_attr_to_name) {
             std::string graph;
-            std::shared_ptr<::ONNX_NAMESPACE::ModelProto> model_proto;
-            RawDataExportMap export_map;
-            SymbolDimMap symbol_map;
-            bool val_use_external_data_format = false;
-            std::tie(
-                model_proto,
-                export_map,
-                symbol_map,
-                val_use_external_data_format) =
-                export_onnx(
-                    g,
-                    initializers,
-                    onnx_opset_version,
-                    dynamic_axes,
-                    defer_weight_export,
-                    operator_export_type,
-                    strip_doc_string,
-                    keep_initializers_as_inputs,
-                    custom_opsets,
-                    add_node_names,
-                    val_use_external_data_format,
-                    onnx_file_path,
-                    node_attr_to_name);
+            auto
+                [model_proto,
+                 export_map,
+                 symbol_map,
+                 val_use_external_data_format,
+                 onnx_node_names] =
+                    export_onnx(
+                        g,
+                        initializers,
+                        onnx_opset_version,
+                        dynamic_axes,
+                        defer_weight_export,
+                        operator_export_type,
+                        strip_doc_string,
+                        keep_initializers_as_inputs,
+                        custom_opsets,
+                        add_node_names,
+                        false,
+                        onnx_file_path,
+                        node_attr_to_name);
             std::unordered_map<std::string, py::bytes>
                 python_serialized_export_map;
             for (auto& kv : export_map) {
@@ -289,7 +294,8 @@ void initPythonIRBindings(PyObject* module_) {
             return std::make_tuple(
                 py::bytes(graph),
                 python_serialized_export_map,
-                val_use_external_data_format);
+                val_use_external_data_format,
+                onnx_node_names);
           },
           py::arg("initializers"),
           py::arg("onnx_opset_version") = 0,
@@ -370,11 +376,20 @@ void initPythonIRBindings(PyObject* module_) {
           "Find all nodes",
           py::arg("kind"),
           py::arg("recurse") = true)
-      .def("addInput", [](Graph& g) { return g.addInput(); })
+      .def(
+          "addInput",
+          [](Graph& g, const std::string& name) { return g.addInput(name); },
+          "Add input to graph with optional name seed",
+          py::arg("name") = "")
       .def("copy", [](Graph& g) { return g.copy(); })
       .GS(eraseInput)
       .GS(eraseOutput)
       .GS(registerOutput)
+      .def(
+          "permuteInputs",
+          [](Graph& g, const std::vector<size_t>& new_inputs) {
+            g.block()->permuteInputs(new_inputs);
+          })
       .def(
           "create",
           [](Graph& g, const char* str) {
@@ -444,20 +459,20 @@ void initPythonIRBindings(PyObject* module_) {
       .def("setInsertPoint", [](Graph& g, Block* n) { g.setInsertPoint(n); })
       .def(
           "insertGraph",
-          [](Graph& g, Graph& callee, std::vector<Value*> inputs) {
+          [](Graph& g, Graph& callee, const std::vector<Value*>& inputs) {
             return insertGraph(g, callee, inputs);
           })
       .def(
           "insertGraph",
           [](Graph& g,
              Graph& callee,
-             std::vector<Value*> inputs,
+             const std::vector<Value*>& inputs,
              std::unordered_map<Value*, Value*> value_map) {
             return insertGraph(g, callee, inputs, value_map);
           })
       .def(
           "insert",
-          [](Graph& g, Symbol opname, std::vector<Value*> args) {
+          [](Graph& g, Symbol opname, const std::vector<Value*>& args) {
             std::vector<NamedValue> args_named;
             args_named.reserve(args.size());
             for (Value* v : args) {
@@ -470,7 +485,9 @@ void initPythonIRBindings(PyObject* module_) {
           [](Graph& g) {
             auto tup = g.createTuple(g.outputs());
             tup->insertBefore(g.return_node());
-            for (int64_t i = g.outputs().size() - 1; i >= 0; i--) {
+            for (int64_t i = static_cast<int64_t>(g.outputs().size()) - 1;
+                 i >= 0;
+                 i--) {
               g.eraseOutput(0);
             }
             g.registerOutput(tup->output());
@@ -601,7 +618,7 @@ void initPythonIRBindings(PyObject* module_) {
           "schema",
           [](Node& n) {
             std::stringstream ss;
-            if (auto sch = n.maybeSchema()) {
+            if (n.maybeSchema()) {
               ss << n.schema();
             } else {
               ss << "(no schema)";
@@ -636,6 +653,11 @@ void initPythonIRBindings(PyObject* module_) {
       .def(
           "getModuleHierarchy",
           [](Node& n) { return torch::jit::utils::getNodesModuleHierarchy(n); })
+      .def(
+          "namedInput",
+          [](Node& n, const std::string& unqualName) {
+            return n.namedInput(unqualName);
+          })
       .NS(addInput)
       .NS(copyMetadata)
       .NS(replaceInput)
@@ -734,18 +756,32 @@ void initPythonIRBindings(PyObject* module_) {
           [](Node& n, const char* name, const at::Tensor& v) {
             return n.t_(
                 Symbol::attr(name),
-                autograd::Variable(v.view(std::vector<int64_t>{}))
-                    .set_requires_grad(false));
+                v.view(std::vector<int64_t>{}).set_requires_grad(false));
           })
       .def(
           "z",
           [](Node& n, const char* name) { return n.t(Symbol::attr(name)); })
       .def(
+          "ty_",
+          [](Node& n, const char* name, const TypePtr& type) {
+            return n.ty_(Symbol::attr(name), type);
+          })
+      .def(
+          "ty",
+          [](Node& n, const char* name) { return n.ty(Symbol::attr(name)); })
+      .def(
+          "tys_",
+          [](Node& n, const char* name, const std::vector<TypePtr>& types) {
+            return n.tys_(Symbol::attr(name), types);
+          })
+      .def(
+          "tys",
+          [](Node& n, const char* name) { return n.tys(Symbol::attr(name)); })
+      .def(
           "zs_",
           [](Node& n, const char* name, TensorsAttr::ValueType v) {
             for (auto& i : v) {
-              i = autograd::Variable(i.view(std::vector<int64_t>{}))
-                      .set_requires_grad(false);
+              i = i.view(std::vector<int64_t>{}).set_requires_grad(false);
             }
             return n.ts_(Symbol::attr(name), std::move(v));
           })
@@ -782,6 +818,9 @@ void initPythonIRBindings(PyObject* module_) {
             s << t;
             return s.str();
           })
+      .def(
+          "containedTypes",
+          [](Type& self) { return self.containedTypes().vec(); })
       .def("kind", [](const Type& t) { return typeKindToString(t.kind()); })
       .def(
           "dim",
@@ -826,7 +865,7 @@ void initPythonIRBindings(PyObject* module_) {
           })
       .def(
           "with_sizes",
-          [](Type& t, c10::optional<std::vector<c10::optional<int64_t>>> sizes)
+          [](Type& t, std::optional<std::vector<std::optional<int64_t>>> sizes)
               -> py::object {
             auto ptt = t.expect<TensorType>();
             if (!ptt) {
@@ -883,7 +922,8 @@ void initPythonIRBindings(PyObject* module_) {
       .def(
           "with_device",
           [](Type& t, py::object device) -> py::object {
-            at::Device c_device = python::detail::py_object_to_device(device);
+            at::Device c_device =
+                python::detail::py_object_to_device(std::move(device));
             if (auto ptt = t.expect<TensorType>()) {
               return py::cast(ptt->withDevice(c_device));
             }
@@ -905,7 +945,7 @@ void initPythonIRBindings(PyObject* module_) {
           "with_dtype",
           [](Type& t, py::object dtype) -> py::object {
             at::ScalarType scalar_type =
-                python::detail::py_object_to_dtype(dtype);
+                python::detail::py_object_to_dtype(std::move(dtype));
 
             if (auto ptt = t.expect<TensorType>()) {
               // auto scalar_type = dtype->scalar_type;
@@ -948,6 +988,10 @@ void initPythonIRBindings(PyObject* module_) {
       .def_static("get", &NumberType::get);
   py::class_<IntType, Type, IntTypePtr>(m, "IntType")
       .def_static("get", &IntType::get);
+  py::class_<SymIntType, Type, SymIntTypePtr>(m, "SymIntType")
+      .def_static("get", &SymIntType::get);
+  py::class_<SymBoolType, Type, SymBoolTypePtr>(m, "SymBoolType")
+      .def_static("get", &SymBoolType::get);
   py::class_<FloatType, Type, FloatTypePtr>(m, "FloatType")
       .def_static("get", &FloatType::get);
   py::class_<ComplexType, Type, ComplexTypePtr>(m, "ComplexType")
@@ -964,6 +1008,10 @@ void initPythonIRBindings(PyObject* module_) {
       .def_static("get", &StringType::get);
   py::class_<DeviceObjType, Type, DeviceObjTypePtr>(m, "DeviceObjType")
       .def_static("get", &DeviceObjType::get);
+  // TODO(antoniojkim): Add GeneratorType to the public API once its been added
+  //                    to the public documentation
+  py::class_<GeneratorType, Type, GeneratorTypePtr>(m, "_GeneratorType")
+      .def_static("get", &GeneratorType::get);
   py::class_<StreamObjType, Type, StreamObjTypePtr>(m, "StreamObjType")
       .def_static("get", &StreamObjType::get);
   py::class_<PyObjectType, Type, PyObjectTypePtr>(m, "PyObjectType")
@@ -984,17 +1032,15 @@ void initPythonIRBindings(PyObject* module_) {
       });
   py::class_<UnionType, Type, UnionTypePtr>(m, "UnionType")
       .def(py::init(
-          [](const std::vector<TypePtr>& a) { return UnionType::create(a); }))
-      .def("containedTypes", [](UnionType& self) {
-        return self.containedTypes().vec();
-      });
+          [](const std::vector<TypePtr>& a) { return UnionType::create(a); }));
   py::class_<ListType, Type, ListTypePtr>(m, "ListType")
-      .def(py::init([](TypePtr a) { return ListType::create(a); }))
+      .def(py::init([](const TypePtr& a) { return ListType::create(a); }))
       .def_static("ofInts", &ListType::ofInts)
       .def_static("ofTensors", &ListType::ofTensors)
       .def_static("ofFloats", &ListType::ofFloats)
       .def_static("ofComplexDoubles", &ListType::ofComplexDoubles)
       .def_static("ofBools", &ListType::ofBools)
+      .def_static("ofStrings", &ListType::ofStrings)
       .def("getElementType", &ListType::getElementType);
   py::class_<DictType, Type, DictTypePtr>(m, "DictType")
       .def(py::init([](TypePtr key, TypePtr value) {
@@ -1003,8 +1049,7 @@ void initPythonIRBindings(PyObject* module_) {
       .def("getKeyType", &DictType::getKeyType)
       .def("getValueType", &DictType::getValueType);
   py::class_<OptionalType, Type, OptionalTypePtr>(m, "OptionalType")
-      .def(py::init(
-          [](TypePtr a) { return OptionalType::create(std::move(a)); }))
+      .def(py::init([](const TypePtr& a) { return OptionalType::create(a); }))
       .def_static("ofTensor", &OptionalType::ofTensor)
       .def("getElementType", &OptionalType::getElementType);
   py::class_<RRefType, Type, RRefTypePtr>(m, "RRefType")
@@ -1015,13 +1060,24 @@ void initPythonIRBindings(PyObject* module_) {
       .def(py::init([](TypePtr a) { return FutureType::create(std::move(a)); }))
       .def("getElementType", &FutureType::getElementType);
 
+  py::class_<AwaitType, Type, AwaitTypePtr>(m, "AwaitType")
+      .def(py::init([](TypePtr a) { return AwaitType::create(std::move(a)); }))
+      .def("getElementType", &AwaitType::getElementType);
+
   py::class_<ClassType, Type, ClassTypePtr>(m, "ClassType")
       .def(py::init([](const std::string& qualified_name) {
         return get_python_cu()->get_class(c10::QualifiedName(qualified_name));
       }))
       .def("name", [](ClassType& self) { return self.name()->name(); })
-      .def("qualified_name", [](ClassType& self) {
-        return self.name()->qualifiedName();
+      .def(
+          "qualified_name",
+          [](ClassType& self) { return self.name()->qualifiedName(); })
+      .def("method_names", [](ClassType& self) {
+        std::vector<std::string> method_names;
+        for (const auto* method : self.methods()) {
+          method_names.push_back(method->name());
+        }
+        return method_names;
       });
   py::class_<EnumType, Type, EnumTypePtr>(m, "EnumType")
       .def(py::init([](const std::string& qualified_name,
@@ -1032,7 +1088,7 @@ void initPythonIRBindings(PyObject* module_) {
         for (const auto& enum_name_value : enum_names_values) {
           auto enum_name = py::cast<std::string>(enum_name_value.attr("name"));
           auto enum_value = toIValue(enum_name_value.attr("value"), value_type);
-          names_values.emplace_back(std::make_pair(enum_name, enum_value));
+          names_values.emplace_back(enum_name, enum_value);
         }
         return EnumType::create(
             c10::QualifiedName(qualified_name),
@@ -1100,5 +1156,4 @@ void initPythonIRBindings(PyObject* module_) {
             return g.graph_output_to_symbolic_shape_dim_;
           });
 }
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

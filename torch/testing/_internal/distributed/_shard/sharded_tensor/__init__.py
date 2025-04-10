@@ -1,3 +1,5 @@
+# mypy: allow-untyped-defs
+
 import sys
 from functools import wraps, partial
 
@@ -7,6 +9,7 @@ from torch.distributed import rpc
 from torch.testing._internal.common_distributed import (
     MultiProcessTestCase,
     TEST_SKIPS,
+    tp_transports,
 )
 
 TEST_GPU_NUM = 4
@@ -31,8 +34,9 @@ class ShardedTensorTestBase(MultiProcessTestCase):
         if backend == "nccl":
             torch.cuda.set_device(self.rank)
 
+
     def init_rpc(self):
-        rpc_backend_options = rpc.TensorPipeRpcBackendOptions()
+        rpc_backend_options = rpc.TensorPipeRpcBackendOptions(_transports=tp_transports())
         rpc_backend_options.init_method = f"file://{self.file_name}"
         for rank in range(self.world_size):
             rpc_backend_options.set_device_map(
@@ -40,7 +44,7 @@ class ShardedTensorTestBase(MultiProcessTestCase):
             )
 
         rpc.init_rpc(
-            name="worker%d" % self.rank,
+            name=f"worker{self.rank:d}",
             rank=self.rank,
             world_size=self.world_size,
             rpc_backend_options=rpc_backend_options,
@@ -89,6 +93,6 @@ def with_comms(func=None, init_rpc=True, backend="nccl"):
         if backend == "nccl" and torch.cuda.device_count() < self.world_size:
             sys.exit(TEST_SKIPS[f"multi-gpu-{self.world_size}"].exit_code)
         self.init_comms(init_rpc=init_rpc, backend=backend)
-        func(self)
+        func(self, *args, **kwargs)
         self.destroy_comms(destroy_rpc=init_rpc)
     return wrapper

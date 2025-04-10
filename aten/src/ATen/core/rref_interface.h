@@ -1,7 +1,7 @@
 #pragma once
 
 #include <c10/util/intrusive_ptr.h>
-#include <ATen/core/type_ptr.h>
+#include <ATen/core/jit_type_base.h>
 
 namespace c10 {
 
@@ -17,9 +17,10 @@ class C10_EXPORT RRefInterface : public c10::intrusive_ptr_target {
   // counting.
   RRefInterface(const RRefInterface& other) = delete;
   RRefInterface(RRefInterface&& other) = delete;
+  RRefInterface& operator=(const RRefInterface& other) = delete;
   RRefInterface& operator=(RRefInterface&& other) = delete;
 
-  virtual ~RRefInterface() = default;
+  ~RRefInterface() override = default;
 
   // returns the worker id of the owner
   virtual worker_id_t owner() const = 0;

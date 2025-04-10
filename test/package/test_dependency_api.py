@@ -2,13 +2,14 @@
 
 import importlib
 from io import BytesIO
-from sys import version_info
 from textwrap import dedent
 from unittest import skipIf
 
+import torch.nn
 from torch.package import EmptyMatchError, Importer, PackageExporter, PackageImporter
 from torch.package.package_exporter import PackagingError
 from torch.testing._internal.common_utils import IS_WINDOWS, run_tests
+
 
 try:
     from .common import PackageTestCase
@@ -111,7 +112,6 @@ class TestDependencyAPI(PackageTestCase):
                     ),
                 )
 
-    @skipIf(version_info < (3, 7), "mock uses __getattr__ a 3.7 feature")
     def test_mock(self):
         buffer = BytesIO()
         with PackageExporter(buffer) as he:
@@ -132,7 +132,6 @@ class TestDependencyAPI(PackageTestCase):
         with self.assertRaisesRegex(NotImplementedError, "was mocked out"):
             r()
 
-    @skipIf(version_info < (3, 7), "mock uses __getattr__ a 3.7 feature")
     def test_mock_glob(self):
         buffer = BytesIO()
         with PackageExporter(buffer) as he:
@@ -174,7 +173,6 @@ class TestDependencyAPI(PackageTestCase):
                 exporter.mock(include=["package_b.*"], allow_empty=False)
                 exporter.save_module("package_a.subpackage")
 
-    @skipIf(version_info < (3, 7), "mock uses __getattr__ a 3.7 feature")
     def test_pickle_mocked(self):
         import package_a.subpackage
 
@@ -182,13 +180,12 @@ class TestDependencyAPI(PackageTestCase):
         obj2 = package_a.PackageAObject(obj)
 
         buffer = BytesIO()
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(PackagingError):
             with PackageExporter(buffer) as he:
                 he.mock(include="package_a.subpackage")
                 he.intern("**")
                 he.save_pickle("obj", "obj.pkl", obj2)
 
-    @skipIf(version_info < (3, 7), "mock uses __getattr__ a 3.7 feature")
     def test_pickle_mocked_all(self):
         import package_a.subpackage
 
@@ -245,6 +242,8 @@ class TestDependencyAPI(PackageTestCase):
                 * Module did not match against any action pattern. Extern, mock, or intern it.
                     package_a
                     package_a.subpackage
+
+                Set debug=True when invoking PackageExporter for a visualization of where broken modules are coming from!
                 """
             ),
         )
@@ -269,7 +268,7 @@ class TestDependencyAPI(PackageTestCase):
             return module
 
         class BrokenImporter(Importer):
-            def __init__(self):
+            def __init__(self) -> None:
                 self.modules = {
                     "foo": create_module("foo"),
                     "bar": create_module("bar"),
@@ -292,6 +291,8 @@ class TestDependencyAPI(PackageTestCase):
                 * Module is a C extension module. torch.package supports Python modules only.
                     foo
                     bar
+
+                Set debug=True when invoking PackageExporter for a visualization of where broken modules are coming from!
                 """
             ),
         )
@@ -311,11 +312,12 @@ class TestDependencyAPI(PackageTestCase):
                 * Dependency resolution failed.
                     foo
                       Context: attempted relative import beyond top-level package
+
+                Set debug=True when invoking PackageExporter for a visualization of where broken modules are coming from!
                 """
             ),
         )
 
-    @skipIf(version_info < (3, 7), "mock uses __getattr__ a 3.7 feature")
     def test_repackage_mocked_module(self):
         """Re-packaging a package that contains a mocked module should work correctly."""
         buffer = BytesIO()
@@ -346,6 +348,29 @@ class TestDependencyAPI(PackageTestCase):
         # "package_a" should still be mocked out.
         with self.assertRaises(NotImplementedError):
             foo2.package_a.get_something()
+
+    def test_externing_c_extension(self):
+        """Externing c extensions modules should allow us to still access them especially those found in torch._C."""
+
+        buffer = BytesIO()
+        # The C extension module in question is F.gelu which comes from torch._C._nn
+        model = torch.nn.TransformerEncoderLayer(
+            d_model=64,
+            nhead=2,
+            dim_feedforward=64,
+            dropout=1.0,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+        with PackageExporter(buffer) as e:
+            e.extern("torch.**")
+            e.intern("**")
+
+            e.save_pickle("model", "model.pkl", model)
+        buffer.seek(0)
+        imp = PackageImporter(buffer)
+        imp.load_pickle("model", "model.pkl")
 
 
 if __name__ == "__main__":

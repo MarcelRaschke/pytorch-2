@@ -6,19 +6,17 @@
 #include <torch/csrc/jit/serialization/pickler.h>
 #include <vector>
 
-namespace torch {
-namespace distributed {
-namespace rpc {
+namespace torch::distributed::rpc {
 
 using torch::jit::Operator;
 
 // A ScriptRemoteCall instance represents an invocation of `dist.remote` on a
 // builtin operator. Currently, it does not support using RRef as arguments yet.
 // Besides the operator and a vector of arguments, ScriptRemoteCall also
-// caontains the RRefId and the ForkId of the return value RRef.
+// contains the RRefId and the ForkId of the return value RRef.
 class TORCH_API ScriptRemoteCall final : public ScriptCall {
  public:
-  // Constructor for builitin operator call.
+  // Constructor for builtin operator call.
   ScriptRemoteCall(
       std::shared_ptr<Operator> op,
       std::vector<at::IValue>&& stack,
@@ -48,10 +46,10 @@ class TORCH_API ScriptRemoteCall final : public ScriptCall {
   static std::unique_ptr<ScriptRemoteCall> fromMessage(const Message& message);
 
  private:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const RRefId retRRefId_;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const ForkId retForkId_;
 };
 
-} // namespace rpc
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::rpc

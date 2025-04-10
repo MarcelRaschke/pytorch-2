@@ -9,33 +9,27 @@
 /// If you are writing a compute bound kernel, you can use the CUDA half
 /// intrinsics directly on the Half type from device code.
 
+#include <c10/macros/Export.h>
 #include <c10/macros/Macros.h>
-#include <c10/util/C++17.h>
-#include <c10/util/TypeSafeSignMath.h>
-#include <c10/util/complex.h>
+#include <c10/util/bit_cast.h>
+#include <c10/util/floating_point_utils.h>
 #include <type_traits>
 
-#if defined(__cplusplus) && (__cplusplus >= 201103L)
+#if defined(__cplusplus)
 #include <cmath>
-#include <cstdint>
 #elif !defined(__OPENCL_VERSION__)
 #include <math.h>
-#include <stdint.h>
 #endif
 
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
 
-#include <complex>
 #include <cstdint>
 #include <cstring>
 #include <iosfwd>
 #include <limits>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <utility>
+#include <ostream>
 
 #ifdef __CUDACC__
 #include <cuda_fp16.h>
@@ -45,50 +39,32 @@
 #include <hip/hip_fp16.h>
 #endif
 
-// Standard check for compiling CUDA with clang
-#if defined(__clang__) && defined(__CUDA__) && defined(__CUDA_ARCH__)
-#define C10_DEVICE_HOST_FUNCTION __device__ __host__
-#else
-#define C10_DEVICE_HOST_FUNCTION
+#if defined(CL_SYCL_LANGUAGE_VERSION)
+#include <CL/sycl.hpp> // for SYCL 1.2.1
+#elif defined(SYCL_LANGUAGE_VERSION)
+#include <sycl/sycl.hpp> // for SYCL 2020
 #endif
 
-#include <typeinfo> // operator typeid
+#if defined(__aarch64__) && !defined(__CUDACC__)
+#include <arm_neon.h>
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386) || \
+    defined(_M_IX86)
+#if defined(__F16C__) &&                               \
+    !(defined(__CUDA_ARCH__) || defined(__CUDACC__) || \
+      defined(__HIP_DEVICE_COMPILE__))
+#define C10_X86_F16 1
+#include <immintrin.h> // import conversion ops from f16cintrin.h
+#endif // defined(__F16C__) && !(defined(__CUDA_ARCH__) || defined(__CUDACC__)
+       // || defined(__HIP_DEVICE_COMPILE__))
+#endif // __x86_64__ || _M_X64 || __i386 || _M_IX86
+#endif // __GNUC__ || __clang__
 
 namespace c10 {
 
 namespace detail {
-
-C10_DEVICE_HOST_FUNCTION inline float fp32_from_bits(uint32_t w) {
-#if defined(__OPENCL_VERSION__)
-  return as_float(w);
-#elif defined(__CUDA_ARCH__)
-  return __uint_as_float((unsigned int)w);
-#elif defined(__INTEL_COMPILER)
-  return _castu32_f32(w);
-#else
-  union {
-    uint32_t as_bits;
-    float as_value;
-  } fp32 = {w};
-  return fp32.as_value;
-#endif
-}
-
-C10_DEVICE_HOST_FUNCTION inline uint32_t fp32_to_bits(float f) {
-#if defined(__OPENCL_VERSION__)
-  return as_uint(f);
-#elif defined(__CUDA_ARCH__)
-  return (uint32_t)__float_as_uint(f);
-#elif defined(__INTEL_COMPILER)
-  return _castf32_u32(f);
-#else
-  union {
-    float as_value;
-    uint32_t as_bits;
-  } fp32 = {f};
-  return fp32.as_bits;
-#endif
-}
 
 /*
  * Convert a 16-bit floating-point number in IEEE half-precision format, in bit
@@ -195,7 +171,10 @@ inline uint32_t fp16_ieee_to_fp32_bits(uint16_t h) {
  * mode and no operations on denormals) floating-point operations and bitcasts
  * between integer and floating-point variables.
  */
-inline float fp16_ieee_to_fp32_value(uint16_t h) {
+C10_HOST_DEVICE inline float fp16_ieee_to_fp32_value(uint16_t h) {
+#ifdef C10_X86_F16
+  return _cvtsh_ss(h);
+#else
   /*
    * Extend the half-precision floating-point number to 32 bits and shift to the
    * upper part of the 32-bit word:
@@ -263,8 +242,13 @@ inline float fp16_ieee_to_fp32_value(uint16_t h) {
   constexpr uint32_t exp_offset = UINT32_C(0xE0) << 23;
   // const float exp_scale = 0x1.0p-112f;
   constexpr uint32_t scale_bits = (uint32_t)15 << 23;
-  float exp_scale_val;
+  float exp_scale_val = 0;
+#if defined(_MSC_VER) && defined(__clang__)
+  __builtin_memcpy(&exp_scale_val, &scale_bits, sizeof(exp_scale_val));
+#else
   std::memcpy(&exp_scale_val, &scale_bits, sizeof(exp_scale_val));
+#endif
+
   const float exp_scale = exp_scale_val;
   const float normalized_value =
       fp32_from_bits((two_w >> 4) + exp_offset) * exp_scale;
@@ -290,7 +274,7 @@ inline float fp16_ieee_to_fp32_value(uint16_t h) {
    * single-precision floating-point number is represented as: FP32 = (1 +
    * mantissa * 2**(-23)) * 2**(exponent - 127) Therefore, when the biased
    * exponent is 126, a unit change in the mantissa of the input denormalized
-   * half-precision number causes a change of the constructud single-precision
+   * half-precision number causes a change of the constructed single-precision
    * number by 2**(-24), i.e. the same amount.
    *
    * The last step is to adjust the bias of the constructed single-precision
@@ -318,6 +302,7 @@ inline float fp16_ieee_to_fp32_value(uint16_t h) {
       (two_w < denormalized_cutoff ? fp32_to_bits(denormalized_value)
                                    : fp32_to_bits(normalized_value));
   return fp32_from_bits(result);
+#endif // C10_X86_F16
 }
 
 /*
@@ -330,11 +315,14 @@ inline float fp16_ieee_to_fp32_value(uint16_t h) {
  * between integer and floating-point variables.
  */
 inline uint16_t fp16_ieee_from_fp32_value(float f) {
+#ifdef C10_X86_F16
+  return _cvtss_sh(f, _MM_FROUND_TO_NEAREST_INT);
+#else
   // const float scale_to_inf = 0x1.0p+112f;
   // const float scale_to_zero = 0x1.0p-110f;
   constexpr uint32_t scale_to_inf_bits = (uint32_t)239 << 23;
   constexpr uint32_t scale_to_zero_bits = (uint32_t)17 << 23;
-  float scale_to_inf_val, scale_to_zero_val;
+  float scale_to_inf_val = 0, scale_to_zero_val = 0;
   std::memcpy(&scale_to_inf_val, &scale_to_inf_bits, sizeof(scale_to_inf_val));
   std::memcpy(
       &scale_to_zero_val, &scale_to_zero_bits, sizeof(scale_to_zero_val));
@@ -363,7 +351,32 @@ inline uint16_t fp16_ieee_from_fp32_value(float f) {
   return static_cast<uint16_t>(
       (sign >> 16) |
       (shl1_w > UINT32_C(0xFF000000) ? UINT16_C(0x7E00) : nonsign));
+#endif // C10_X86_F16
 }
+
+#ifdef C10_X86_F16
+#undef C10_X86_F16
+#endif // C10_X86_F16
+
+#if defined(__aarch64__) && !defined(__CUDACC__)
+inline float16_t fp16_from_bits(uint16_t h) {
+  return c10::bit_cast<float16_t>(h);
+}
+
+inline uint16_t fp16_to_bits(float16_t f) {
+  return c10::bit_cast<uint16_t>(f);
+}
+
+// According to https://godbolt.org/z/frExdbsWG it would translate to single
+// fcvt s0, h0
+inline float native_fp16_to_fp32_value(uint16_t h) {
+  return static_cast<float>(fp16_from_bits(h));
+}
+
+inline uint16_t native_fp16_from_fp32_value(float f) {
+  return fp16_to_bits(static_cast<float16_t>(f));
+}
+#endif
 
 } // namespace detail
 
@@ -382,129 +395,29 @@ struct alignas(2) Half {
   Half() = default;
 #endif
 
-  constexpr C10_HOST_DEVICE Half(unsigned short bits, from_bits_t) : x(bits){};
+  constexpr C10_HOST_DEVICE Half(unsigned short bits, from_bits_t) : x(bits) {}
+#if defined(__aarch64__) && !defined(__CUDACC__)
+  inline Half(float16_t value);
+  inline operator float16_t() const;
+#else
   inline C10_HOST_DEVICE Half(float value);
   inline C10_HOST_DEVICE operator float() const;
+#endif
 
 #if defined(__CUDACC__) || defined(__HIPCC__)
   inline C10_HOST_DEVICE Half(const __half& value);
   inline C10_HOST_DEVICE operator __half() const;
 #endif
+#ifdef SYCL_LANGUAGE_VERSION
+  inline C10_HOST_DEVICE Half(const sycl::half& value);
+  inline C10_HOST_DEVICE operator sycl::half() const;
+#endif
 };
 
-// This is just a placeholder for whatever complex representation we
-// end up deciding to use for half-precision complex numbers.
-template <>
-struct alignas(4) complex<Half> {
-  using value_type = Half;
-  Half real_;
-  Half imag_;
-  complex() = default;
-  Half real() const {
-    return real_;
-  }
-  Half imag() const {
-    return imag_;
-  }
-  explicit inline complex(c10::complex<float> value)
-      : real_(value.real()), imag_(value.imag()) {}
-  explicit inline complex(c10::complex<double> value)
-      : real_(static_cast<float>(value.real())),
-        imag_(static_cast<float>(value.imag())) {}
-  inline operator c10::complex<float>() const {
-    return {real_, imag_};
-  }
-};
-
-// In some versions of MSVC, there will be a compiler error when building.
-// C4146: unary minus operator applied to unsigned type, result still unsigned
-// C4804: unsafe use of type 'bool' in operation
-// It can be addressed by disabling the following warning.
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4146)
-#pragma warning(disable : 4804)
-#pragma warning(disable : 4018)
-#endif
-
-// The overflow checks may involve float to int conversion which may
-// trigger precision loss warning. Re-enable the warning once the code
-// is fixed. See T58053069.
-#ifdef __clang__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunknown-warning-option"
-#pragma GCC diagnostic ignored "-Wimplicit-int-float-conversion"
-#endif
-
-// bool can be converted to any type.
-// Without specializing on bool, in pytorch_linux_trusty_py2_7_9_build:
-// `error: comparison of constant '255' with boolean expression is always false`
-// for `f > limit::max()` below
-template <typename To, typename From>
-typename std::enable_if<std::is_same<From, bool>::value, bool>::type overflows(
-    From /*f*/) {
-  return false;
+C10_API inline std::ostream& operator<<(std::ostream& out, const Half& value) {
+  out << (float)value;
+  return out;
 }
-
-// skip isnan and isinf check for integral types
-template <typename To, typename From>
-typename std::enable_if<
-    std::is_integral<From>::value && !std::is_same<From, bool>::value,
-    bool>::type
-overflows(From f) {
-  using limit = std::numeric_limits<typename scalar_value_type<To>::type>;
-  if (!limit::is_signed && std::numeric_limits<From>::is_signed) {
-    // allow for negative numbers to wrap using two's complement arithmetic.
-    // For example, with uint8, this allows for `a - b` to be treated as
-    // `a + 255 * b`.
-    return greater_than_max<To>(f) ||
-        (c10::is_negative(f) && -static_cast<uint64_t>(f) > limit::max());
-  } else {
-    return c10::less_than_lowest<To>(f) || greater_than_max<To>(f);
-  }
-}
-
-template <typename To, typename From>
-typename std::enable_if<std::is_floating_point<From>::value, bool>::type
-overflows(From f) {
-  using limit = std::numeric_limits<typename scalar_value_type<To>::type>;
-  if (limit::has_infinity && std::isinf(static_cast<double>(f))) {
-    return false;
-  }
-  if (!limit::has_quiet_NaN && (f != f)) {
-    return true;
-  }
-  return f < limit::lowest() || f > limit::max();
-}
-
-#ifdef __clang__
-#pragma GCC diagnostic pop
-#endif
-
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
-
-template <typename To, typename From>
-typename std::enable_if<is_complex<From>::value, bool>::type overflows(From f) {
-  // casts from complex to real are considered to overflow if the
-  // imaginary component is non-zero
-  if (!is_complex<To>::value && f.imag() != 0) {
-    return true;
-  }
-  // Check for overflow componentwise
-  // (Technically, the imag overflow check is guaranteed to be false
-  // when !is_complex<To>, but any optimizer worth its salt will be
-  // able to figure it out.)
-  return overflows<
-             typename scalar_value_type<To>::type,
-             typename From::value_type>(f.real()) ||
-      overflows<
-             typename scalar_value_type<To>::type,
-             typename From::value_type>(f.imag());
-}
-
-C10_API std::ostream& operator<<(std::ostream& out, const Half& value);
 
 } // namespace c10
 

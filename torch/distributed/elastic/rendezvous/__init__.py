@@ -120,30 +120,44 @@ of the following implementations that come with PyTorch:
      backend = C10dRendezvousBackend(store, "my_run_id")
 
      rdzv_handler = DynamicRendezvousHandler.from_backend(
-         run_id="my_run_id",
-         store=store,
-         backend=backend,
-         min_nodes=2,
-         max_nodes=4
+         run_id="my_run_id", store=store, backend=backend, min_nodes=2, max_nodes=4
      )
 """
 
-from .api import *  # noqa: F403
-from .registry import _register_default_handlers
+from .api import (
+    rendezvous_handler_registry,
+    RendezvousClosedError,
+    RendezvousConnectionError,
+    RendezvousError,
+    RendezvousGracefulExitError,
+    RendezvousHandler,
+    RendezvousHandlerCreator,
+    RendezvousHandlerRegistry,
+    RendezvousInfo,
+    RendezvousParameters,
+    RendezvousStateError,
+    RendezvousStoreInfo,
+    RendezvousTimeoutError,
+)
+from .registry import _register_default_handlers, _register_out_of_tree_handlers
 
 
 _register_default_handlers()
+_register_out_of_tree_handlers()
 
 
 __all__ = [
     "RendezvousClosedError",
     "RendezvousConnectionError",
     "RendezvousError",
+    "RendezvousGracefulExitError",
     "RendezvousHandler",
     "RendezvousHandlerCreator",
     "RendezvousHandlerRegistry",
+    "RendezvousInfo",
     "RendezvousParameters",
     "RendezvousStateError",
+    "RendezvousStoreInfo",
     "RendezvousTimeoutError",
     "rendezvous_handler_registry",
 ]

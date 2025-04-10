@@ -1,12 +1,14 @@
-#include <ATen/ATen.h>
-#include <ATen/NativeFunctions.h>
-#include <ATen/native/DispatchStub.h>
-
 #pragma once
+#include <ATen/native/DispatchStub.h>
+#include <cstdint>
 
-namespace at { namespace native {
+namespace at {
+class TensorBase;
+}
 
-using channel_shuffle_fn = void(*)(Tensor&, const Tensor&, int64_t);
-DECLARE_DISPATCH(channel_shuffle_fn, channel_shuffle_kernel);
+namespace at::native {
 
-}} // at::native
+using channel_shuffle_fn = void(*)(TensorBase&, const TensorBase&, int64_t);
+DECLARE_DISPATCH(channel_shuffle_fn, channel_shuffle_kernel)
+
+} // at::native

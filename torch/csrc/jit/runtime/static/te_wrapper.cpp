@@ -4,10 +4,13 @@
 #include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/runtime/static/impl.h>
+#include <torch/csrc/jit/tensorexpr/expr.h>
+#include <torch/csrc/jit/tensorexpr/operators/misc.h>
 #include <torch/csrc/jit/tensorexpr/operators/operators.h>
 
-namespace torch {
-namespace jit {
+#include <utility>
+
+namespace torch::jit {
 
 using namespace torch::jit::tensorexpr;
 
@@ -27,7 +30,7 @@ void TEWrapper::call(const std::vector<void*>& args) {
   cg->call_raw(args);
 }
 
-void optimizePointwise(LoopNest* ln, Tensor target, int width) {
+static void optimizePointwise(LoopNest* ln, Tensor target, int width) {
   std::vector<ForPtr> loops = ln->getLoopStmtsFor(target);
   ForPtr inner, tail;
   TORCH_CHECK(loops.size() > 0, "No loops created for pointwise op");
@@ -35,7 +38,7 @@ void optimizePointwise(LoopNest* ln, Tensor target, int width) {
   ln->vectorize(inner);
 }
 
-std::shared_ptr<TEWrapper> wrapTECompute(
+static std::shared_ptr<TEWrapper> wrapTECompute(
     std::shared_ptr<TEWrapper> wrap,
     Tensor out,
     std::vector<CodeGen::BufferArg> args,
@@ -52,7 +55,7 @@ std::shared_ptr<TEWrapper> wrapTECompute(
   return wrap;
 }
 
-std::shared_ptr<TEWrapper> wrapTECompute(
+static std::shared_ptr<TEWrapper> wrapTECompute(
     std::shared_ptr<TEWrapper> wrap,
     LoopNest* ln,
     std::vector<CodeGen::BufferArg> args) {
@@ -67,18 +70,18 @@ void TEWrapper::call(const std::vector<void*>& args) {
   DCHECK(0 && "Invalid call");
 }
 
-std::shared_ptr<TEWrapper> wrapTECompute(
+static std::shared_ptr<TEWrapper> wrapTECompute(
     std::shared_ptr<TEWrapper> wrap,
-    Tensor out,
-    std::vector<CodeGen::BufferArg> args,
+    const Tensor& out,
+    const std::vector<CodeGen::BufferArg>& args,
     int width = kVectorWidth) {
   return wrap;
 }
 
-std::shared_ptr<TEWrapper> wrapTECompute(
+static std::shared_ptr<TEWrapper> wrapTECompute(
     std::shared_ptr<TEWrapper> wrap,
     LoopNest* ln,
-    std::vector<CodeGen::BufferArg> args) {
+    const std::vector<CodeGen::BufferArg>& args) {
   return wrap;
 }
 
@@ -91,8 +94,8 @@ std::mutex& getNNCCacheMutex() {
   return nncCacheMutex;
 }
 
-FastMap<NodeKind, std::shared_ptr<TEWrapper>>& getNNCCache() {
-  static FastMap<NodeKind, std::shared_ptr<TEWrapper>> nncCache;
+c10::FastMap<NodeKind, std::shared_ptr<TEWrapper>>& getNNCCache() {
+  static c10::FastMap<NodeKind, std::shared_ptr<TEWrapper>> nncCache;
   return nncCache;
 }
 
@@ -107,10 +110,50 @@ std::shared_ptr<TEWrapper> lookupNNCCache(NodeKind kind) {
 
 void updateNNCCache(NodeKind kind, std::shared_ptr<TEWrapper> code) {
   std::lock_guard<std::mutex> lock(getNNCCacheMutex());
-  getNNCCache()[kind] = code;
+  getNNCCache()[kind] = std::move(code);
 }
 
 } // namespace
+
+std::shared_ptr<TEWrapper> createDiv() {
+  auto wrap = lookupNNCCache(aten::div);
+  if (wrap) {
+    return wrap;
+  }
+  wrap = std::make_shared<TEWrapper>();
+
+  auto dim = VarHandle("dim", kInt);
+  auto mode = VarHandle("mode", kInt);
+  BufHandle A("A", {dim}, kFloat);
+  BufHandle B("B", {dim}, kFloat);
+
+  using axis = const VarHandle&;
+  Tensor C = Compute("C", {dim}, [&](axis x) {
+    auto true_div_result = A.load(x) / B.load(x);
+
+    auto mode_default = IntImm::make(0);
+    auto mode_trunc = IntImm::make(1);
+    auto mode_floor = IntImm::make(2);
+
+    // this is a glorified ternary choice operator train
+    return CompareSelect::make(
+        mode,
+        mode_default,
+        true_div_result,
+        CompareSelect::make(
+            mode,
+            mode_trunc,
+            trunc(true_div_result),
+            floor(true_div_result),
+            kEQ),
+        kEQ);
+  });
+
+  wrap = wrapTECompute(wrap, C, {A, B, mode, dim});
+
+  updateNNCCache(aten::div, wrap);
+  return wrap;
+}
 
 std::shared_ptr<TEWrapper> createLogit() {
   auto wrap = lookupNNCCache(aten::logit);
@@ -180,13 +223,59 @@ std::shared_ptr<TEWrapper> createSigmoid() {
   wrap = std::make_shared<TEWrapper>();
   auto N = VarHandle("N", kInt);
   BufHandle A("A", {N}, kFloat);
-  Tensor B =
-      Compute("B", {N}, [&](const VarHandle& i) { return sigmoid(A.load(i)); });
-  // NNC uses sleef for vectorizing sigmoid, which comes in an 8-wide flavor
-  // (Sleef_expf8).
-  constexpr int kSleefWidth = 8;
-  wrap = wrapTECompute(wrap, B, {A, N}, kSleefWidth);
+  Tensor B = Compute(
+      "B", {N}, [&](const VarHandle& i) { return fast_sigmoid(A.load(i)); });
+  wrap = wrapTECompute(wrap, B, {A, N});
   updateNNCCache(aten::sigmoid, wrap);
+  return wrap;
+}
+
+std::shared_ptr<TEWrapper> createClamp() {
+  static auto clamp_symbol = c10::Symbol::fromQualString("aten::clamp");
+  auto wrap = lookupNNCCache(clamp_symbol);
+  if (wrap) {
+    return wrap;
+  }
+  wrap = std::make_shared<TEWrapper>();
+  auto N = VarHandle("N", kInt);
+  auto min_handle = VarHandle("min", kFloat);
+  auto max_handle = VarHandle("max", kFloat);
+
+  BufHandle A("A", {N}, kFloat);
+  Tensor result = Compute("aten_clamp", {N}, [&](const VarHandle& i) {
+    auto a = A.load(i);
+    return tensorexpr::clamp(min_handle, max_handle, a);
+  });
+  wrap = wrapTECompute(wrap, result, {A, min_handle, max_handle, N});
+  updateNNCCache(clamp_symbol, wrap);
+  return wrap;
+}
+
+std::shared_ptr<TEWrapper> createClampNanToNum() {
+  static auto symbol =
+      c10::Symbol::fromQualString("static_runtime::clamp_nan_to_num");
+  auto wrap = lookupNNCCache(symbol);
+  if (wrap) {
+    return wrap;
+  }
+  wrap = std::make_shared<TEWrapper>();
+  auto N = VarHandle("N", kInt);
+  auto min_handle = VarHandle("min", kFloat);
+  auto max_handle = VarHandle("max", kFloat);
+  auto nan_replace_val = VarHandle("nan_replace_val", kFloat);
+
+  BufHandle A("A", {N}, kFloat);
+  Tensor result = Compute("aten_clamp", {N}, [&](const VarHandle& i) {
+    auto a = A.load(i);
+    auto clamp = tensorexpr::clamp(min_handle, max_handle, a);
+    auto is_nan = tensorexpr::isnan(clamp);
+    auto nans_replaced =
+        tensorexpr::CompareSelect::make(is_nan, 1, nan_replace_val, clamp, kEQ);
+    return nans_replaced;
+  });
+  wrap = wrapTECompute(
+      wrap, result, {A, min_handle, max_handle, nan_replace_val, N});
+  updateNNCCache(symbol, wrap);
   return wrap;
 }
 
@@ -223,5 +312,4 @@ std::shared_ptr<TEWrapper> createSignedLog1p() {
   return wrap;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

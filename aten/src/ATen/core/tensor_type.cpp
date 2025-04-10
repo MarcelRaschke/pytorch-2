@@ -1,7 +1,44 @@
 #include <ATen/core/Tensor.h>
 #include <ATen/core/jit_type.h>
+#include <c10/core/GradMode.h>
+
+#include <utility>
 
 namespace c10 {
+
+namespace {
+
+// The idea is to only mark possible overlap across dimensions. We want to
+// return false for expanded tensors and permuted tensors, for which dimensional
+// collapsing is safe.
+bool possible_cross_dimension_overlap(c10::IntArrayRef sizes, c10::IntArrayRef strides) {
+  int n_dim = static_cast<int>(sizes.size());
+  std::vector<size_t> stride_indices(n_dim);
+  std::iota(stride_indices.rbegin(), stride_indices.rend(), 0);
+
+  // sort indices going with ascending strides
+  for (int i = 1; i < n_dim; i++) {
+    auto c = i;
+    for (int j = i - 1; j >= 0; j--) {
+      if (strides[stride_indices[j]] > strides[stride_indices[c]]) {
+        std::swap(stride_indices[j], stride_indices[c]);
+        c = j;
+      }
+    }
+  }
+
+  for (const auto i : c10::irange(1, n_dim)) {
+    if (i != 0) {
+      // we are being conservative on checking for memory overlap
+      if (sizes[stride_indices[i]] != 1 && strides[stride_indices[i]] < sizes[stride_indices[i-1]] * strides[stride_indices[i-1]]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+}
 
 const TensorTypePtr& TensorType::get() {
   static auto value = TensorType::create(
@@ -38,8 +75,9 @@ std::ostream& operator<<(std::ostream& out, const VaryingShape<T>& vs) {
     if (i > 0) {
       out << ", ";
     }
-    if (vs[i].has_value()) {
-      out << vs[i].value();
+    auto const& v = vs[i];
+    if (v.has_value()) {
+      out << v.value();
     } else {
       out << "*";
     }
@@ -60,20 +98,20 @@ std::ostream& operator<<(
     const SymbolicShape& ss) {
   // TODO: Unranked SymbolicShape printing is ambiguous with that of
   // dynamic-shaped vector.
-  if(!ss.rank()) {
+  auto rank_opt = ss.rank();
+  if(!rank_opt.has_value()) {
     os << "(*)";
     return os;
   }
-
-  auto sizes = ss.sizes().value();
+  auto sizes_opt = ss.sizes();
 
   os << "(";
-  for (size_t i = 0; i < ss.rank().value(); i++) {
+  for (size_t i = 0; i < rank_opt.value(); i++) {
     if (i > 0) {
       os << ", ";
     }
-    if(sizes[i].is_static()) {
-      os << sizes[i];
+    if(sizes_opt.has_value() && sizes_opt.value()[i].is_static()) {
+      os << sizes_opt.value()[i];
     } else {
       os << "*";
     }
@@ -115,6 +153,10 @@ VaryingShape<Stride> TensorType::computeStrideProps(
     bool tensor_contiguity) {
   int n_dim = static_cast<int>(sizes.size());
   std::vector<size_t> stride_indices(n_dim);
+  // default has_overlap to false as we only compute overlap when:
+  // 1. input sizes/strides fails format check;
+  // 2. tensor_contiguity are not set.
+  bool has_overlap = false;
 
   // Sorting strides in ascending order
   // Example:
@@ -155,7 +197,7 @@ VaryingShape<Stride> TensorType::computeStrideProps(
       } else if (strides[a] > strides[b]) {
         return 1;
       } else { // strides[a] == strides[b]
-        if (sizes[a] < sizes[b] || a > b ) {
+        if (sizes[a] > sizes[b]) {
           return 1;
         }
       }
@@ -173,21 +215,35 @@ VaryingShape<Stride> TensorType::computeStrideProps(
         }
       }
     }
+    // conveniently is_contiguous_strides/is_contiguous_strides only returns
+    // true when there's no memory overlap, so we only re-compute has_overlap
+    // in the last branch when both returns false
+    if (!tensor_contiguity) {
+      // trust tensor_contiguity and only computes overlap when it is not set
+      has_overlap = possible_cross_dimension_overlap(sizes, strides);
+    }
   }
+
   std::vector<Stride> stride_properties;
+  stride_properties.reserve(stride_indices.size());
   for (size_t i = 0; i < stride_indices.size(); i++) {
     bool contiguous_ = tensor_contiguity;
     if (!contiguous_) {
-      // innermost stride expected to be 1
-      // TODO: turn contiguous_ into an enum CONTIGUOUS, NONCONTIGUOUS,
-      // BROADCASTED
-      if (i == 0) {
-        contiguous_ = strides[stride_indices[i]] == 1;
+      if (!has_overlap) {
+        // innermost stride expected to be 1
+        // TODO: turn contiguous_ into an enum CONTIGUOUS, NONCONTIGUOUS,
+        // BROADCASTED
+        if (i == 0) {
+          contiguous_ = strides[stride_indices[i]] == 1;
+        } else {
+          contiguous_ = strides[stride_indices[i]] == 1 ||
+              (strides[stride_indices[i]] != 0 &&
+               strides[stride_indices[i]] ==
+                   strides[stride_indices[i - 1]] * sizes[stride_indices[i - 1]]);
+        }
       } else {
-        contiguous_ = strides[stride_indices[i]] == 1 ||
-            (strides[stride_indices[i]] != 0 &&
-             strides[stride_indices[i]] ==
-                 strides[stride_indices[i - 1]] * sizes[stride_indices[i - 1]]);
+        // leaving this assign statement for readability;
+        contiguous_ = false;
       }
     }
     stride_properties.emplace_back(stride_indices[i], contiguous_, strides[stride_indices[i]]);
@@ -201,7 +257,7 @@ TensorTypePtr TensorType::create(const at::Tensor& t) {
   VaryingShape<size_t> stride_indices;
   VaryingShape<int64_t> strides;
   VaryingShape<int64_t> sizes;
-  if (!t.is_mkldnn() && !t.is_sparse() && !t.is_sparse_csr()) {
+  if (t.layout() == at::kStrided && !t.is_nested()) {
     sizes = VaryingShape<int64_t>{t.sizes().vec()};
     strides = VaryingShape<int64_t>{t.strides().vec()};
     return TensorType::create(
@@ -218,47 +274,49 @@ TensorTypePtr TensorType::create(const at::Tensor& t) {
 }
 
 TensorTypePtr TensorType::create(
-    c10::optional<at::ScalarType> scalar_type,
-    c10::optional<Device> device,
+    std::optional<at::ScalarType> scalar_type,
+    std::optional<Device> device,
     const VaryingShape<int64_t>& sizes,
     const VaryingShape<int64_t>& strides,
-    c10::optional<bool> requires_grad,
-    c10::optional<bool> undefined, bool tensor_contiguity) {
-  if(strides.concrete_sizes() && strides.concrete_sizes().has_value()){
+    std::optional<bool> requires_grad,
+    std::optional<bool> undefined, bool tensor_contiguity) {
+  const auto stride_concrete_sizes = strides.concrete_sizes();
+  if(stride_concrete_sizes.has_value()){
+    const auto size_concrete_sizes = sizes.concrete_sizes();
     // handles case where strides are set
-    TORCH_INTERNAL_ASSERT(sizes.concrete_sizes()->size() == strides.concrete_sizes()->size());
-    auto sprops = strides.concrete_sizes().has_value()
-      ? computeStrideProps(*sizes.concrete_sizes(), *strides.concrete_sizes(), tensor_contiguity)
-      : VaryingShape<Stride>();
-    auto symbol_sizes = SymbolicShape(*sizes.concrete_sizes());
+    TORCH_INTERNAL_ASSERT(size_concrete_sizes.has_value() && size_concrete_sizes->size() == stride_concrete_sizes->size());
+    auto sprops =
+       computeStrideProps(*size_concrete_sizes, *stride_concrete_sizes, tensor_contiguity);
+    auto symbol_sizes = SymbolicShape(*size_concrete_sizes);
     return TensorType::create(
       scalar_type, device, symbol_sizes, sprops, requires_grad, undefined);
   } else {
     // strides are all null, but still have number of strides equal to number of ranks
-    TORCH_INTERNAL_ASSERT(sizes.sizes() && sizes.size());
-    auto symbol_sizes = SymbolicShape(*sizes.sizes());
+    auto const& sizes_opt = sizes.sizes();
+    TORCH_INTERNAL_ASSERT(sizes_opt.has_value() && sizes.size());
+    auto symbol_sizes = SymbolicShape(sizes_opt.value());
     return TensorType::create(
-      scalar_type, device, symbol_sizes, VaryingShape<Stride>(*sizes.size()), requires_grad, undefined);
+      scalar_type, device, symbol_sizes, VaryingShape<Stride>(sizes_opt->size()), requires_grad, undefined);
   }
 }
 
 TensorTypePtr TensorType::create(
-    c10::optional<at::ScalarType> scalar_type,
-    c10::optional<Device> device,
-    const SymbolicShape& sizes,
-    const VaryingShape<Stride>& strides,
-    c10::optional<bool> requires_grad,
-    c10::optional<bool> undefined) {
+    std::optional<at::ScalarType> scalar_type,
+    std::optional<Device> device,
+    SymbolicShape sizes,
+    VaryingShape<Stride> strides,
+    std::optional<bool> requires_grad,
+    std::optional<bool> undefined) {
   auto pt = TensorTypePtr(new TensorType(
-      scalar_type, device, sizes, strides, requires_grad, undefined));
+      scalar_type, device, std::move(sizes), std::move(strides), requires_grad, undefined));
   return pt;
 }
 
 TensorTypePtr TensorType::create(
-    c10::optional<at::ScalarType> scalar_type,
-    c10::optional<Device> device,
-    c10::optional<size_t> dim,
-    c10::optional<bool> requires_grad) {
+    std::optional<at::ScalarType> scalar_type,
+    std::optional<Device> device,
+    std::optional<size_t> dim,
+    std::optional<bool> requires_grad) {
   return TensorType::create(
       scalar_type,
       device,
@@ -277,17 +335,19 @@ template struct VaryingShape<c10::ShapeSymbol>;
 template struct VaryingShape<bool>;
 template struct VaryingShape<size_t>;
 template struct VaryingShape<int64_t>;
+template struct VaryingShape<c10::Stride>;
 
 VaryingShape<int64_t> TensorType::sizes() const {
   if (!sizes_.rank()) {
     return VaryingShape<int64_t>();
   }
   return VaryingShape<int64_t>(
+      // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
       fmap(*sizes_.sizes(), [](ShapeSymbol ss) {
         // we turn symbolic shapes into unknowns
         return ss.is_static()
-            ? c10::optional<int64_t>(ss.static_size())
-            : c10::nullopt;
+            ? std::optional<int64_t>(ss.static_size())
+            : std::nullopt;
       }));
 }
 
@@ -308,7 +368,7 @@ TensorTypePtr TensorType::merge(const TensorType& other, bool merge_sizes) const
 }
 
 template <typename T>
-bool is_null_or_equal(c10::optional<T> a, c10::IntArrayRef b) {
+static bool is_null_or_equal(std::optional<T> a, c10::IntArrayRef b) {
   return !a.has_value() || a.value() == b;
 }
 
@@ -351,35 +411,35 @@ bool TensorType::equals(const c10::Type& rhs) const {
 }
 
 VaryingShape<int64_t> TensorType::strides() const {
-  if (!strides_.size().has_value()) {
+  auto const strides_sizes = strides_.sizes();
+  if (!strides_sizes.has_value()) {
     return VaryingShape<int64_t>();
   }
-  std::vector<c10::optional<int64_t>> ss(*strides_.size());
-  for (size_t i = 0; i < *strides_.size(); i++) {
-    if (!strides_[i].has_value()) {
+  std::vector<std::optional<int64_t>> ss(strides_sizes->size());
+  for (auto const& stride:strides_sizes.value()) {
+    if (!stride.has_value()) {
       continue;
     }
-    auto s = *strides_[i];
+    const auto& s = *stride;
     if (s.stride_index_.has_value() && s.stride_.has_value()) {
       ss[*s.stride_index_] = *s.stride_;
     }
   }
-  return VaryingShape<int64_t>(ss);
+  return VaryingShape<int64_t>(std::move(ss));
 }
 
 TensorType::TensorType(
-    c10::optional<at::ScalarType> scalar_type,
-    c10::optional<Device> device,
-    // NOLINTNEXTLINE(modernize-pass-by-value)
-    const SymbolicShape& sizes,
-    const VaryingShape<Stride>& strides,
-    c10::optional<bool> requires_grad,
-    c10::optional<bool> undefined)
+    std::optional<at::ScalarType> scalar_type,
+    std::optional<Device> device,
+    SymbolicShape sizes,
+    VaryingShape<Stride> strides,
+    std::optional<bool> requires_grad,
+    std::optional<bool> undefined)
     : SharedType(TypeKind::TensorType),
       scalar_type_(scalar_type),
       device_(device),
-      sizes_(sizes),
-      strides_(strides),
+      sizes_(std::move(sizes)),
+      strides_(std::move(strides)),
       requires_grad_(requires_grad),
       undefined_(undefined) {}
 
@@ -394,7 +454,7 @@ TensorTypePtr TensorType::createContiguous(
       device,
       VaryingShape<int64_t>(sizes),
       VaryingShape<int64_t>(strides),
-      c10::nullopt);
+      std::nullopt);
 }
 
 const SymbolicShape& TensorType::symbolic_sizes() const {

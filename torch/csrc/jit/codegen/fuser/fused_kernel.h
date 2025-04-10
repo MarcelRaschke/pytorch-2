@@ -1,22 +1,19 @@
 #pragma once
 
 #include <ATen/ATen.h>
+#include <ATen/Utils.h>
 #include <torch/csrc/jit/codegen/fuser/partition_desc.h>
 #include <torch/csrc/jit/codegen/fuser/tensor_desc.h>
-#include <torch/csrc/utils/disallow_copy.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-namespace torch {
-namespace jit {
-namespace fuser {
+namespace torch::jit::fuser {
 
 struct FusedKernel {
-  TH_DISALLOW_COPY_AND_ASSIGN(FusedKernel);
+  AT_DISALLOW_COPY_AND_ASSIGN(FusedKernel);
 
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
   FusedKernel(
       std::string name,
       std::string code,
@@ -98,6 +95,4 @@ struct FusedKernel {
   const bool has_random_;
 };
 
-} // namespace fuser
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit::fuser

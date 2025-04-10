@@ -2,6 +2,7 @@
 
 #include <ATen/core/dynamic_type.h>
 #include <ATen/core/jit_type.h>
+#include <unordered_set>
 
 namespace c10 {
 
@@ -30,13 +31,13 @@ class TORCH_API TypeParser {
   void lex();
 
   std::string next();
-  c10::string_view nextView();
+  std::string_view nextView();
   void advance();
-  C10_NODISCARD c10::string_view cur() const;
+  [[nodiscard]] std::string_view cur() const;
 
   std::string pythonStr_;
   size_t start_;
-  c10::string_view next_token_;
+  std::string_view next_token_;
 
   // Used for parsing string list
   std::vector<std::string> pythonStrs_;

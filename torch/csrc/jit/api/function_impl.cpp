@@ -1,3 +1,4 @@
+#include <c10/util/Flags.h>
 #include <c10/util/irange.h>
 #include <torch/csrc/jit/api/function_impl.h>
 #include <torch/csrc/jit/passes/inliner.h>
@@ -12,8 +13,13 @@
 #include <torch/csrc/jit/passes/autocast.h>
 #endif
 
-namespace torch {
-namespace jit {
+// clang-format off
+C10_DEFINE_bool(
+    torch_jit_do_not_store_optimized_graph,
+    false,
+    "Do not store the optimized graph.")
+
+namespace torch::jit {
 namespace {
 c10::FunctionSchema defaultSchemaFor(const GraphFunction& function) {
   std::vector<c10::Argument> args;
@@ -23,7 +29,7 @@ c10::FunctionSchema defaultSchemaFor(const GraphFunction& function) {
   for (const auto i : c10::irange(num_inputs)) {
     const Value* v = g.inputs().at(i);
     std::string name = v->hasDebugName() ? v->debugNameBase()
-                                         : ("argument_" + c10::to_string(i));
+                                         : ("argument_" + std::to_string(i));
     args.emplace_back(std::move(name), unshapedType(g.inputs()[i]->type()));
   }
   for (const auto i : c10::irange(g.outputs().size())) {
@@ -56,11 +62,12 @@ T& toGraphFunctionImpl(F& function) {
 
 } // namespace
 
-void placeholderCreator(GraphFunction&) {
+static void placeholderCreator(GraphFunction&) {
   throw RecursiveMethodCallError();
 }
 
 void GraphFunction::run(Stack& stack) {
+  C10_LOG_EVENT_SAMPLED(run, qualname().qualifiedName(), stack);
   get_executor().run(stack);
 }
 
@@ -87,13 +94,32 @@ const c10::FunctionSchema& GraphFunction::getSchema() const {
   return *schema_;
 }
 
+std::shared_ptr<Graph> GraphFunction::optimized_graph() const {
+  std::lock_guard<std::recursive_mutex> lock(compile_mutex);
+  decltype(optimized_graphs_)::value_type graph;
+  auto& graph_ref = !FLAGS_torch_jit_do_not_store_optimized_graph
+      ? optimized_graphs_[currentSpecialization()]
+      : graph;
+  if (graph_ref) {
+    return graph_ref;
+  }
+  graph_ref = graph_->copy();
+  if (getGraphExecutorOptimize()) {
+    preoptimizeGraph(graph_ref, force_no_amp_);
+  }
+  return graph_ref;
+}
+
 GraphFunction::SpecializationKey GraphFunction::currentSpecialization() const {
+  if (force_no_amp_) {
+    return SpecializationKey::AutocastOff;
+  }
 #ifdef C10_MOBILE
   // disabling autodiff pass for mobile build since autocast APIs don't exist
   return SpecializationKey::AutocastOff;
 #else
-  bool cpu_enabled = at::autocast::is_cpu_enabled();
-  bool gpu_enabled = at::autocast::is_enabled();
+  bool cpu_enabled = at::autocast::is_autocast_enabled(at::kCPU);
+  bool gpu_enabled = at::autocast::is_autocast_enabled(at::kCUDA);
   if (cpu_enabled && gpu_enabled) {
     return SpecializationKey::CpuGpuAutocastOn;
   } else if (!cpu_enabled && !gpu_enabled) {
@@ -105,11 +131,11 @@ GraphFunction::SpecializationKey GraphFunction::currentSpecialization() const {
 #endif
 }
 
-void preoptimizeGraph(std::shared_ptr<Graph>& graph) {
+void preoptimizeGraph(std::shared_ptr<Graph>& graph, bool disable_autocast) {
   Inline(*graph);
 
-  // Peephole Optimize cleans up many "is None" checks and creates constant prop
-  // opportunities
+  // Peephole Optimize cleans up many "is None" checks and creates constant
+  // prop opportunities
   PeepholeOptimize(graph, true);
 
   // AliasDb construction can be slow, so run it just on immutable types
@@ -125,7 +151,9 @@ void preoptimizeGraph(std::shared_ptr<Graph>& graph) {
   //     of the any optimizations
   //  2. AMP transformations would benefit from followup passes's cleanup
   //
-  Autocast(graph);
+  if (!disable_autocast) {
+    Autocast(graph);
+  }
 #endif
 
   ConstantPooling(graph);
@@ -143,5 +171,4 @@ const GraphFunction& toGraphFunction(const Function& function) {
   return toGraphFunctionImpl<const GraphFunction>(function);
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

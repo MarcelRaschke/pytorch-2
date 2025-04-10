@@ -4,6 +4,7 @@
 #include <ATen/core/ivalue.h>
 #include <ATen/record_function.h>
 #include <c10/core/thread_pool.h>
+#include <c10/macros/Macros.h>
 #include <c10/util/Exception.h>
 #include <c10/util/irange.h>
 #include <torch/csrc/autograd/edge.h>
@@ -26,6 +27,7 @@
 #include <torch/csrc/jit/runtime/profiling_record.h>
 #include <torch/csrc/jit/runtime/script_profile.h>
 #include <torch/csrc/jit/runtime/vararg_functions.h>
+#include <torch/csrc/utils/cpp_stacktraces.h>
 #include <string>
 
 #ifdef USE_RPC
@@ -44,17 +46,27 @@ using torch::distributed::autograd::DistAutogradContainer;
 #include <utility>
 #include <vector>
 
+// clang-format off
 C10_DEFINE_bool(
     torch_jit_enable_rethrow_caught_exception,
     false,
-    "enable rethrowing caught exception");
+    "enable rethrowing caught exception")
 
-namespace torch {
-namespace jit {
+C10_DEFINE_bool(
+    torch_jit_enable_expanded_stacks,
+    false,
+    "When true we will attemps to pre-expand node stacks and cache expanded stacks.")
+
+C10_DEFINE_bool(
+    torch_jit_expanded_stacks_mangled,
+    false,
+    "When true pre-expanded stacks will use mangled names.")
+
+namespace torch::jit {
 
 using CodeImpl = interpreter::CodeImpl;
 
-// Before we translate to intepreter instructions, we do
+// Before we translate to interpreter instructions, we do
 // some preprocessing of the graph to turn it into a form that is closer
 // to what the instructions will look like.
 // In particular we:
@@ -96,8 +108,8 @@ inline int64_t getDistAutogradContextId() {
 
 thread_local InterpreterStateImpl* tls_int_state_ptr_ = nullptr;
 struct TLSCurrentInterpreterGuard {
-  TLSCurrentInterpreterGuard(InterpreterStateImpl* state) {
-    prev_state_ = tls_int_state_ptr_;
+  TLSCurrentInterpreterGuard(InterpreterStateImpl* state)
+      : prev_state_(tls_int_state_ptr_) {
     tls_int_state_ptr_ = state;
   }
 
@@ -108,6 +120,10 @@ struct TLSCurrentInterpreterGuard {
  private:
   InterpreterStateImpl* prev_state_;
 };
+
+bool in_torchscript_runtime() {
+  return tls_int_state_ptr_ != nullptr;
+}
 
 // InterpreterState state that and used to compute a Code
 struct InterpreterStateImpl : c10::intrusive_ptr_target {
@@ -144,12 +160,12 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   // this holds all the tensors for this interpreter run
   // we don't bother minimizing the size of this vector, since the extra
   // memory used by the pointers in this will be small
-  // instead we are very aggresive about releasing tensors when they become dead
-  // to make sure memory management happens efficiently.
-  // We optimize for the case where derivatives are run with retain_graph=False
-  // in the case where it is true, then the interpreter and this array get
-  // copied if this every becomes a bottleneck then we _should_ consider
-  // minimizing the total number or register
+  // instead we are very aggressive about releasing tensors when they become
+  // dead to make sure memory management happens efficiently. We optimize for
+  // the case where derivatives are run with retain_graph=False in the case
+  // where it is true, then the interpreter and this array get copied if this
+  // every becomes a bottleneck then we _should_ consider minimizing the total
+  // number or register
   std::vector<IValue> registers;
 
   // A stack of objects that have been __enter__'d.
@@ -163,7 +179,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   }
 
   void enterFrame(const Code& code, size_t base_pointer) {
-    frames.emplace_back(Frame{code.pImpl, 0, base_pointer, c10::nullopt});
+    frames.emplace_back(Frame{code.pImpl, 0, base_pointer, std::nullopt});
     registers.resize(registers.size() + code.pImpl->register_size_);
   }
 
@@ -175,7 +191,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   void callFunction(
       Function& f,
       Stack& stack,
-      size_t bailOut = GraphExecutor::getDefaultNumBailOuts(),
+      std::optional<size_t> bailOut = std::nullopt,
       bool next = true) {
     bool newFrame = f.call(stack, bailOut, [&](const Code& code) {
       enterFrame(code, stack.size() - code.num_inputs());
@@ -187,7 +203,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   }
 
   // relative to the end of the register list so that when we call
-  // functions we are referring to the registers of the currenly executing
+  // functions we are referring to the registers of the currently executing
   // function.
   IValue& reg(size_t reg) {
     return *(registers.end() - reg);
@@ -201,24 +217,54 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     }
   }
 
+  class StackSizeDidntChangeGuard {
+   public:
+    StackSizeDidntChangeGuard(const StackSizeDidntChangeGuard&) = delete;
+    StackSizeDidntChangeGuard(StackSizeDidntChangeGuard&&) = delete;
+    StackSizeDidntChangeGuard& operator=(const StackSizeDidntChangeGuard&) =
+        delete;
+    StackSizeDidntChangeGuard& operator=(StackSizeDidntChangeGuard&&) = delete;
+
+    StackSizeDidntChangeGuard(
+        const Frame& frame,
+        const torch::jit::Stack& stack,
+        const Instruction& inst)
+        : frame_(frame), stack_(stack), instX_(inst.X) {
+      // portable maybe_unused attribute.
+      (void)frame_;
+      (void)stack_;
+      (void)instX_;
+      (void)initialSize_;
+    }
+
+    void callAssert() const {
+#ifndef NDEBUG
+      frame_.function->assert_stack_size(instX_, initialSize_, stack_.size());
+#endif
+    }
+
+   private:
+    const Frame& frame_;
+    const torch::jit::Stack& stack_;
+    std::uint32_t instX_;
+    std::size_t initialSize_{stack_.size()};
+  };
+
+  struct [[maybe_unused]] DoNothing {};
+
 #if defined(__GNUC__) || defined(__clang__)
 #define JIT_USE_COMPUTED_GOTO
 #endif
 // Primitives for making interpreter internal state transitions.
 // We maintain two local variables as the internal interpreter state:
-// `frame` will be the current frame that the interpreter operatos on.
+// `frame` will be the current frame that the interpreter operators on.
 // `inst` will the current instruction pointed to by program counter.
 //
 // Instruction blocks should be always declared through `INST` macro and
-// the instruction body should always start with a `INST_GUARD` declaration.
+// the instruction body should always start with a `instGuard()` declaration.
 // Also blocks should be ended properly with either `INST_NEXT` (for going
 // to the next instruction), or `INST_DISPATCH` (for jumping to a computed
-// position using `INST_FETCH`).
-#define INST_FETCH(X) (frame.function->instructions_[frame.pc += (X)])
-#define INST_GUARD                                   \
-  profiling::InstructionSpan span {                  \
-    *frame.function->instructions_source()[frame.pc] \
-  }
+// position using `instFetch`).
 #if defined(JIT_USE_COMPUTED_GOTO)
 #define INST(NAME) \
   NAME:            \
@@ -228,11 +274,12 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
 #define INST(NAME) NAME
 #define INST_DISPATCH break
 #endif
-#define INST_NEXT       \
-  inst = INST_FETCH(1); \
+#define INST_NEXT      \
+  inst = instFetch(1); \
   INST_DISPATCH
 
-  bool runImpl(Stack& stack) {
+  template <bool EnableProfiling>
+  bool runTemplate(Stack& stack) {
     // if we have never run before, then we might have to return the
     // stack when we suspend, record where it starts so we return the right
     // stack
@@ -262,17 +309,36 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     try {
       while (true) {
         Frame& frame = frames.back();
-        Instruction inst = INST_FETCH(0);
+
+        auto instFetch = [&](auto x) {
+          return frame.function->instructions_[frame.pc += x];
+        };
+
+        auto instGuard = [&] {
+          if constexpr (!EnableProfiling) {
+            return DoNothing{};
+          } else {
+            return profiling::InstructionSpan{
+                *frame.function->instructions_source()[frame.pc]};
+          }
+        };
+
+        Instruction inst = instFetch(0);
+
+        auto stackSizeAssertGuard = [&] {
+          return StackSizeDidntChangeGuard{frame, stack, inst};
+        };
+
         switch (inst.op) {
           case INST(ENTER): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             const auto& obj = peek(stack, 0, 1);
             TORCH_INTERNAL_ASSERT(obj.isObject());
             entered_objects.push_back(obj);
           }
             INST_NEXT;
           case INST(EXIT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             auto obj = entered_objects.back().toObject();
             auto& f = obj->type()->getMethod("__exit__");
             push(stack, std::move(obj));
@@ -284,73 +350,66 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             continue;
           }
           case INST(OP): {
-            INST_GUARD;
-#ifndef NDEBUG
-            size_t init_size = stack.size();
-#endif
+            [[maybe_unused]] auto _ = instGuard();
+            auto stackSizeGuard = stackSizeAssertGuard();
             frame.function->operator_table_[inst.X](stack);
-#ifndef NDEBUG
-            frame.function->assert_stack_size(inst.X, init_size, stack.size());
-#endif
+            stackSizeGuard.callAssert();
           }
             INST_NEXT;
           case INST(OPN): {
-            INST_GUARD;
-            stack.push_back(inst.N);
-#ifndef NDEBUG
-            size_t init_size = stack.size();
-#endif
+            [[maybe_unused]] auto _ = instGuard();
+            stack.emplace_back(inst.N);
+            auto stackSizeGuard = stackSizeAssertGuard();
             frame.function->operator_table_[inst.X](stack);
-#ifndef NDEBUG
-            frame.function->assert_stack_size(inst.X, init_size, stack.size());
-#endif
+            stackSizeGuard.callAssert();
           }
             INST_NEXT;
           case INST(LOAD): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             stack.emplace_back(reg(inst.X));
           }
             INST_NEXT;
           case INST(MOVE): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             stack.emplace_back(std::move(reg(inst.X)));
           }
             INST_NEXT;
           case INST(STORE): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             reg(inst.X) = pop(stack);
           }
             INST_NEXT;
           case INST(STOREN): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
+            TORCH_INTERNAL_ASSERT(stack.size() >= inst.N);
             for (size_t i = inst.N; i > 0; --i) {
               reg(inst.X + i - 1) = pop(stack);
             }
           }
             INST_NEXT;
           case INST(DROP): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             stack.pop_back();
           }
             INST_NEXT;
           case INST(DROPR): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             reg(inst.X) = IValue();
           }
             INST_NEXT;
           case INST(LOADC): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             stack.emplace_back(frame.function->constant_table_[inst.X]);
           }
             INST_NEXT;
           case INST(GET_ATTR): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             const auto& userObj = stack.back().toObjectRef();
             stack.back() = userObj.getSlot(inst.X);
           }
             INST_NEXT;
           case INST(SET_ATTR): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             auto v = pop(stack);
             auto& userObj = stack.back().toObjectRef();
             userObj.setSlot(inst.X, std::move(v));
@@ -358,21 +417,21 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(JF): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             if (pop(stack).toBool()) {
-              inst = INST_FETCH(1);
+              inst = instFetch(1);
             } else {
-              inst = INST_FETCH(inst.X);
+              inst = instFetch(inst.X);
             }
           }
             INST_DISPATCH;
           case INST(JMP): {
-            INST_GUARD;
-            inst = INST_FETCH(inst.X);
+            [[maybe_unused]] auto _ = instGuard();
+            inst = instFetch(inst.X);
           }
             INST_DISPATCH;
           case INST(LOOP): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             // stack: iteration_count, max_iter, cond, loop_carried_deps...
             auto fr = stack.end() - (inst.N + 1);
             int64_t trip_count = fr[0].toInt();
@@ -381,25 +440,25 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             if (trip_count < max_trip_count && cond) {
               fr[2] = trip_count;
               fr[0] = trip_count + 1;
-              inst = INST_FETCH(1);
+              inst = instFetch(1);
             } else {
               size_t n_loop_carried = inst.N - 2;
               for (const auto i : c10::irange(n_loop_carried)) {
                 fr[i] = std::move(fr[i + 3]);
               }
               drop(stack, 3); // iteration_count, max_iter, cond
-              inst = INST_FETCH(inst.X);
+              inst = instFetch(inst.X);
             }
           }
             INST_DISPATCH;
           case INST(CALL): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             Function* fn = frame.function->function_table_[inst.X];
             callFunction(*fn, stack);
             continue;
           }
           case INST(INTERFACE_CALL): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             // note the hash table lookup to find the function
             // this can be more optimized if necessary, caching parts
             // of the hashing computation or storing the offset when
@@ -440,7 +499,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             return false;
           }
           case INST(WAIT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             auto future = stack.back().toFuture();
             if (!future->completed()) {
               getOrCreateFuture();
@@ -453,8 +512,8 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
                     Stack stack)
                     : stateImpl_(std::move(state)),
                       state_(stateImpl_),
-                      stack_(std::move(stack)) {
-                  dist_autograd_context_id_ = getDistAutogradContextId();
+                      stack_(std::move(stack)),
+                      dist_autograd_context_id_(getDistAutogradContextId()) {
                   state_ = InterpreterState(stateImpl_);
                 }
                 void operator()(c10::ivalue::Future& /* unused */) {
@@ -498,7 +557,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(PROFILE_OP): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             auto& frame_id_ref = frame.id;
             if (!frame_id_ref.has_value()) {
               frame_id_ref = Frame::genId();
@@ -510,7 +569,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(FAIL_GUARD): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             // patch FAIL_GUARD back to GUARD
             GRAPH_DEBUG(
                 "Bailout ", inst.X, " triggered via bailout_requests_!");
@@ -519,9 +578,8 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(TYPECHECK): {
-            INST_GUARD;
-            int num_inputs = inst.N, i = 0;
-            // NOLINTNEXTLINE(clang-diagnostic-sign-compare)
+            [[maybe_unused]] auto _ = instGuard();
+            unsigned num_inputs = inst.N, i = 0;
             TORCH_INTERNAL_ASSERT(stack.size() >= num_inputs && num_inputs > 0);
             // Check every input's shape against profiled (expected) shape.
             for (i = 0; i < num_inputs; i++) {
@@ -540,7 +598,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(GUARD): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             if (!stack.back().isTensor()) {
               // stack.back() is an Uninitialized IValue and this is a guard
               // on a block output. Uninitialized IValues are never used
@@ -561,7 +619,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(TAIL_CALL): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             GRAPH_DEBUG("running TAIL_CALL for ", inst.X);
             frame.function->function_table_[inst.X]->ensure_defined();
             size_t remaining_bailout_depth =
@@ -584,22 +642,22 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             continue;
           }
           case INST(LIST_UNPACK): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             listUnpack(stack, inst.X);
           }
             INST_NEXT;
           case INST(TUPLE_CONSTRUCT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             tupleConstruct(stack, inst.X);
           }
             INST_NEXT;
           case INST(TUPLE_SLICE): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             tupleSlice(stack, inst.X, inst.X + inst.N);
           }
             INST_NEXT;
           case INST(NAMED_TUPLE_CONSTRUCT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             namedTupleConstruct(
                 stack,
                 frame.function->type_table_[inst.X]->expect<TupleType>(),
@@ -607,28 +665,28 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(LIST_CONSTRUCT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             const auto& type =
                 frame.function->type_table_[inst.X]->expectRef<ListType>();
             listConstruct(stack, type, inst.N);
           }
             INST_NEXT;
           case INST(DICT_CONSTRUCT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             const auto& type =
                 frame.function->type_table_[inst.X]->expectRef<DictType>();
             dictConstruct(stack, type, inst.N);
           }
             INST_NEXT;
           case INST(CREATE_OBJECT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             auto type =
                 frame.function->type_table_[inst.X]->expect<ClassType>();
             createObject(stack, type);
           }
             INST_NEXT;
           case INST(ISINSTANCE): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             at::ArrayRef<TypePtr> types(
                 &frame.function->type_table_[inst.X],
                 &frame.function->type_table_[inst.X] + inst.N);
@@ -636,90 +694,89 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
           }
             INST_NEXT;
           case INST(TUPLE_INDEX): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             tupleIndex(stack);
           }
             INST_NEXT;
           case INST(RAISE_EXCEPTION): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             raiseExceptionWithMessage(stack);
           }
             INST_NEXT;
           case INST(UNCHECKED_CAST): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             noop(stack);
           }
             INST_NEXT;
           case INST(__IS__): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             is(stack);
           }
             INST_NEXT;
           case INST(UN_INITIALIZED): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             unInitialized(stack);
           }
             INST_NEXT;
           case INST(__ISNOT__): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             isNot(stack);
           }
             INST_NEXT;
           case INST(FORMAT): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             format(stack, inst.X);
           }
             INST_NEXT;
           case INST(DEVICE): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             device(stack);
           }
             INST_NEXT;
           case INST(DTYPE): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
+            TORCH_INTERNAL_ASSERT(!stack.empty());
             dtype(stack);
           }
             INST_NEXT;
           case INST(DIM): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
+            TORCH_INTERNAL_ASSERT(!stack.empty());
             dim(stack);
           }
             INST_NEXT;
           case INST(__NOT__): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             _not(stack);
           }
             INST_NEXT;
           case INST(DICT_INDEX): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             dictIndex(stack);
           }
             INST_NEXT;
           case INST(TO_LIST): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             toList(stack);
           }
             INST_NEXT;
           case INST(NUM_TO_TENSOR): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             numToTensorScalar(stack);
           }
             INST_NEXT;
           case INST(IS_CUDA): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             isCuda(stack);
           }
             INST_NEXT;
           case INST(FORK): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             // Move inputs to a separate stack
             auto& forked_fn =
                 toGraphFunction(*frame.function->function_table_[inst.X]);
             InterpreterState forked_interpreter(
-                forked_fn.get_executor()
-                    .getPlanFor(stack, GraphExecutor::getDefaultNumBailOuts())
-                    .code,
-                taskLauncher_);
+                forked_fn.get_executor().getPlanFor(stack).code, taskLauncher_);
             InterpreterContinuation continuation(
                 forked_interpreter,
                 Stack(stack.end() - inst.N, stack.end()),
@@ -729,8 +786,48 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             taskLauncher_(std::move(continuation));
           }
             INST_NEXT;
+          case INST(AWAITABLE): {
+            [[maybe_unused]] auto _ = instGuard();
+            auto fn_ptr = frame.function->function_table_[inst.X];
+            auto& fn = toGraphFunction(*fn_ptr);
+            auto num_outputs = fn.graph()->outputs().size();
+            TypePtr out_type;
+            if (num_outputs == 1) {
+              out_type = fn.graph()->outputs()[0]->type();
+            } else {
+              std::vector<TypePtr> out_types;
+              for (const auto& o : fn.graph()->outputs()) {
+                out_types.push_back(o->type());
+              }
+              out_type = TupleType::create(out_types);
+            }
+            auto args = std::vector<IValue>(stack.end() - inst.N, stack.end());
+            auto aw = c10::make_intrusive<c10::ivalue::Await>(out_type);
+            aw->setArgs(std::move(args));
+            aw->setFn(
+                [&args = aw->args(),
+                 fn_ptr,
+                 taskLauncher = taskLauncher_]() -> IValue {
+                  auto& fn = toGraphFunction(*fn_ptr);
+                  auto n_out = fn.graph()->outputs().size();
+                  torch::jit::Stack s;
+                  for (const auto& arg : args) {
+                    s.push_back(arg);
+                  }
+                  InterpreterState await_interpreter(
+                      fn.get_executor().getPlanFor(s).code, taskLauncher);
+                  await_interpreter.run(s);
+                  if (n_out == 1) {
+                    return s.back();
+                  }
+                  return c10::ivalue::Tuple::create(jit::last(s, n_out));
+                });
+            drop(stack, inst.N);
+            push(stack, std::move(aw));
+          }
+            INST_NEXT;
           case INST(WARN): {
-            INST_GUARD;
+            [[maybe_unused]] auto _ = instGuard();
             // Keeps track of which WARN instruction has been executed before,
             // we only want to execute each WARN once to match default Python
             // warning behavior.
@@ -753,13 +850,13 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
                 // Sends the warning to the warning handler with the
                 // "verbatim" flag. This flag ensures the warning handler
                 // will print the exception as configured.
-                c10::Warning::warn(location, msg, /*verbatim=*/true);
+                c10::warn(c10::Warning(
+                    c10::UserWarning(), location, msg, /*verbatim=*/true));
               }
               stack.pop_back();
             } else {
-              const auto& msg = stack.back().toStringRef();
               if (need_warn) {
-                TORCH_WARN(msg);
+                TORCH_WARN(stack.back().toStringRef());
               }
               stack.pop_back();
             }
@@ -794,15 +891,12 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
       // Janky af.  See https://github.com/pytorch/pytorch/issues/54612
       auto* not_implemented_error = dynamic_cast<c10::NotImplementedError*>(&e);
 
-      c10::optional<std::string> python_class_name;
+      std::optional<std::string> python_class_name;
       if (jit_exception) {
         python_class_name = jit_exception->getPythonClassName();
       }
       handleError(
-          ExceptionMessage(e),
-          (bool)jit_exception,
-          not_implemented_error,
-          python_class_name);
+          e, (bool)jit_exception, not_implemented_error, python_class_name);
       return false;
     }
   }
@@ -810,19 +904,26 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
 #undef INST_NEXT
 #undef INST_DISPATCH
 #undef INST
-#undef INST_GUARD
-#undef INST_FETCH
 #undef JIT_USE_COMPUTED_GOTO
+
+  bool runImpl(Stack& stack) {
+    if (!profiling::isProfilingOngoing()) {
+      return runTemplate</*EnableProfiling*/ false>(stack);
+    } else {
+      return runTemplate</*EnableProfiling*/ true>(stack);
+    }
+  }
 
   void formatStackTrace(std::ostream& out) {
     format_stack_trace(out, callstack());
   }
 
   void handleError(
-      const ExceptionMessage& msg,
+      const std::exception& e,
       bool is_jit_exception,
       c10::NotImplementedError* not_implemented_error,
-      c10::optional<std::string> python_class_name) {
+      std::optional<std::string> python_class_name) {
+    ExceptionMessage msg(e);
     std::ostringstream ss;
     std::string class_name =
         python_class_name ? *python_class_name : "RuntimeError";
@@ -832,24 +933,29 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     if (future_) {
       future_->setError(std::make_exception_ptr(Future::FutureError(ss.str())));
     } else if (is_jit_exception) {
-      throw JITException(ss.str(), python_class_name);
+      // save the original exception's message when creating a new JITException
+      throw JITException(ss.str(), python_class_name, e.what());
     } else if (not_implemented_error) {
       throw c10::NotImplementedError(
           ss.str(),
           not_implemented_error->backtrace(),
           not_implemented_error->caller());
     } else {
+      if (get_cpp_stacktraces_enabled()) {
+        ss << e.what() << "\n";
+      }
       throw std::runtime_error(ss.str());
     }
   }
 
   static void checkAndStartRecordFunction(Frame& frame, Stack& stack) {
-    bool pre_sampled = false;
-    if (!frame.record_function && at::hasCallbacks() &&
-        at::shouldRunRecordFunction(&pre_sampled)) {
-      auto rec_fn = std::make_unique<at::RecordFunction>(
-          at::RecordScope::TORCHSCRIPT_FUNCTION, pre_sampled);
-      if (rec_fn->isActive()) {
+    if (!frame.record_function) {
+      auto step_callbacks = at::getStepCallbacksUnlessEmpty(
+          at::RecordScope::TORCHSCRIPT_FUNCTION);
+      if (C10_UNLIKELY(step_callbacks.has_value())) {
+        auto rec_fn =
+            std::make_unique<at::RecordFunction>(std::move(*step_callbacks));
+        TORCH_INTERNAL_ASSERT_DEBUG_ONLY(rec_fn->isActive());
         if (rec_fn->needsInputs()) {
           rec_fn->before(
               frame.function->function_name_,
@@ -893,7 +999,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
       // module hierarchy.
       const auto& g = frame.function->graph_;
       std::string g_self_type;
-      if (g && g->inputs().size() > 0) {
+      if (g && !g->inputs().empty()) {
         const auto& g_self_type_ptr =
             g->inputs()[0]->type()->cast<c10::ClassType>();
         if (g_self_type_ptr) {
@@ -943,7 +1049,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
         if (node->input(0)->node()->kind() == prim::GetAttr) {
           class_instance_name = node->input(0)->node()->s(attr::name);
         } else if (
-            node->owningGraph()->inputs().size() > 0 &&
+            !node->owningGraph()->inputs().empty() &&
             node->input(0) == node->owningGraph()->inputs()[0]) {
           class_instance_name = "SELF";
         } else {
@@ -1052,7 +1158,6 @@ Code::Code(
           remaining_bailout_depth)) {}
 
 Code::Code(CodeImpl* codeImpl) : pImpl(codeImpl) {}
-Code::~Code() = default;
 
 MobileCode::MobileCode(
     const std::shared_ptr<Graph>& graph,
@@ -1068,8 +1173,6 @@ MobileCode::MobileCode(
           support_default_args_before_out,
           emit_promoted_ops,
           remaining_bailout_depth)) {}
-
-MobileCode::~MobileCode() = default;
 
 const std::vector<GraphExecutor*>& Code::grad_executors() {
   return pImpl->grad_executors();
@@ -1120,11 +1223,14 @@ size_t Code::register_size() const {
   return pImpl->register_size_;
 }
 
+std::shared_ptr<Graph> Code::graph() const {
+  return pImpl->preprocess_.graph;
+}
+
 InterpreterState::InterpreterState(const Code& code, TaskLauncher taskLauncher)
     : pImpl(c10::make_intrusive<InterpreterStateImpl>(
           code,
           std::move(taskLauncher))) {}
-InterpreterState::~InterpreterState() = default;
 
 void InterpreterState::run(Stack& stack) {
   static_cast<InterpreterStateImpl*>(pImpl.get())->run(stack);
@@ -1147,7 +1253,7 @@ void InterpreterContinuation::operator()() {
   auto prev_dist_id = DistAutogradContainer::currentContextId();
   DistAutogradContainer::forceCurrentContextId(dist_autograd_context_id_);
 #endif
-  if (tls_state_ != c10::nullopt) {
+  if (tls_state_ != std::nullopt) {
     at::ThreadLocalStateGuard g(*tls_state_);
     state.runAsync(stack);
   } else {
@@ -1158,5 +1264,4 @@ void InterpreterContinuation::operator()() {
 #endif
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

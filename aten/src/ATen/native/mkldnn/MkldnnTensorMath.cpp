@@ -1,21 +1,27 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <ATen/Config.h>
-#include <ATen/NativeFunctions.h>
 #include <ATen/Parallel.h>
 #include <ATen/cpu/vec/functional.h>
 #include <ATen/cpu/vec/vec.h>
 
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/NativeFunctions.h>
+#else
+#include <ATen/ops/zero_native.h>
+#endif
+
 #if !AT_MKLDNN_ENABLED()
 
-namespace at {
-namespace native {
+
+namespace at::native {
 
 Tensor& mkldnn_zero_(Tensor& self) {
   TORCH_CHECK(false, "mkldnn_zero_: ATen not compiled with MKLDNN support");
 }
 
-} // namespace native
-} // namespace at
+} // namespace at::native
+
 
 #else // AT_MKLDNN_ENABLED
 

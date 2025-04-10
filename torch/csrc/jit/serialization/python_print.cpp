@@ -22,15 +22,14 @@
 
 using c10::QualifiedName;
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 static bool isValidIdentifierChar(char c, size_t pos) {
   return islower(c) || isupper(c) || c == '_' || (pos > 0 && isdigit(c));
 }
 
 static bool isValidIdentifier(const std::string& name) {
-  if (name.size() == 0)
+  if (name.empty())
     return false;
   for (const auto i : c10::irange(name.size())) {
     if (!isValidIdentifierChar(name[i], i))
@@ -147,11 +146,11 @@ struct PythonPrintImpl {
       // This prevents having redundant entries at the same offset,
       // which can happen for example in printValueList when begin
       // and end are the empty string.
-      if (s.size() == 0) {
+      if (s.empty()) {
         return *this;
       }
 
-      if (!ranges_.size() || ranges_.back().range != srs_->back()) {
+      if (ranges_.empty() || ranges_.back().range != srs_->back()) {
         ranges_.emplace_back((size_t)oss_.tellp(), srs_->back());
       }
       oss_ << s;
@@ -160,7 +159,7 @@ struct PythonPrintImpl {
 
     TaggedStringStream& operator<<(const TaggedStringStream& rhs) {
       for (const auto& range : rhs.ranges_) {
-        if (!ranges_.size() || ranges_.back().range != range.range) {
+        if (ranges_.empty() || ranges_.back().range != range.range) {
           ranges_.emplace_back((size_t)oss_.tellp() + range.bytes, range.range);
         }
       }
@@ -179,7 +178,7 @@ struct PythonPrintImpl {
 
     template <typename T>
     TaggedStringStream& operator<<(const T& t) {
-      if (!ranges_.size() || ranges_.back().range != srs_->back()) {
+      if (ranges_.empty() || ranges_.back().range != srs_->back()) {
         ranges_.emplace_back((size_t)oss_.tellp(), srs_->back());
       }
       oss_ << t;
@@ -237,7 +236,7 @@ struct PythonPrintImpl {
     if (v->hasDebugName() && use.user->kind() != prim::Return)
       return false;
     // don't try to inline control blocks
-    if (n->blocks().size() != 0)
+    if (!n->blocks().empty())
       return false;
     // if it is a loop-carried input, we need a variable
     // otherwise the condition or trip count may be emitted in the wrong order
@@ -363,7 +362,7 @@ struct PythonPrintImpl {
     std::string name = candidate;
     while (used.count(name) || reserved_names.count(name)) {
       // NOLINTNEXTLINE(performance-inefficient-string-concatenation)
-      name = candidate + c10::to_string(next_id[name]++);
+      name = candidate + std::to_string(next_id[name]++);
     }
     used.insert(name);
     return name;
@@ -376,7 +375,7 @@ struct PythonPrintImpl {
   // force them to be by rewriting them
   static std::string makeValidIdentifier(const std::string& candidate) {
     std::stringstream ss;
-    if (candidate.size() == 0 || isdigit(candidate[0]))
+    if (candidate.empty() || isdigit(candidate[0]))
       ss << "_";
     for (char c : candidate) {
       if (isupper(c) || islower(c) || isdigit(c) || c == '_')
@@ -437,8 +436,7 @@ struct PythonPrintImpl {
   size_t level = 0;
   // indent to the current indent level
   TaggedStringStream& indent() {
-    for (const auto i : c10::irange(level)) {
-      (void)i; // Suppress unused variable warning
+    for ([[maybe_unused]] const auto i : c10::irange(level)) {
       body_ << "  ";
     }
     return body_;
@@ -456,7 +454,7 @@ struct PythonPrintImpl {
     auto it_b = list_b.begin();
 
     if (list_a.size() != list_b.size()) {
-      AT_ERROR("Python printer expected 2 lists of same size");
+      TORCH_CHECK(false, "Python printer expected 2 lists of same size");
     }
 
     for (; it_a != list_a.end(); ++it_a, ++it_b) {
@@ -511,7 +509,7 @@ struct PythonPrintImpl {
   }
 
   void printAssignment(at::ArrayRef<Value*> lhs, at::ArrayRef<Value*> rhs) {
-    if (lhs.size() == 0) {
+    if (lhs.empty()) {
       return;
     }
     indent();
@@ -562,13 +560,13 @@ struct PythonPrintImpl {
     {
       auto guard = WithIndented();
       // Print node contents
-      printBlock(stmt.thenBlock(), stmt.outputs().size() > 0);
+      printBlock(stmt.thenBlock(), !stmt.outputs().empty());
       printAssignment(stmt.outputs(), stmt.thenOutputs());
     }
     indent() << "else:\n";
     {
       auto guard = WithIndented();
-      printBlock(stmt.elseBlock(), stmt.outputs().size() > 0);
+      printBlock(stmt.elseBlock(), !stmt.outputs().empty());
       printAssignment(stmt.outputs(), stmt.elseOutputs());
     }
   }
@@ -580,10 +578,11 @@ struct PythonPrintImpl {
 
     auto loop_type = stmt.loopType();
     if (loop_type == LoopView::ModifiedLoop) {
-      throw ErrorReport(stmt.node()->sourceRange())
+      throw(
+          ErrorReport(stmt.node()->sourceRange())
           << "loop cannot be printed as python "
           << "because it has gone through an optimization "
-          << "that combined while and for loops. File a bug";
+          << "that combined while and for loops. File a bug");
     }
 
     bool emit_as_for_loop = loop_type == LoopView::For;
@@ -623,7 +622,7 @@ struct PythonPrintImpl {
       auto body_block = stmt.bodyBlock();
       ArrayRef<Value*> loop_carried_block_inputs =
           body_block->inputs().slice(offset);
-      printBlock(body_block, loop_carried_block_inputs.size() > 0);
+      printBlock(body_block, !loop_carried_block_inputs.empty());
       printAssignment(
           loop_carried_block_inputs, body_block->outputs().slice(offset));
     }
@@ -671,20 +670,22 @@ struct PythonPrintImpl {
 
   void scanLongInlines(
       Node* user,
-      int64_t offset,
+      size_t offset,
       std::vector<Value*>& to_split_reversed) {
     auto it = visited_split_inline_uses_.find(user);
     bool present = it != visited_split_inline_uses_.end();
-    for (int64_t i = offset; i >= (present ? it->second + 1 : 0); --i) {
+    for (int64_t i = static_cast<int64_t>(offset);
+         i >= (present ? it->second + 1 : 0);
+         --i) {
       Value* prev_arg = user->input(i);
       if (isNonConstantInline(prev_arg)) {
         to_split_reversed.push_back(prev_arg);
       }
     }
-    visited_split_inline_uses_[user] = offset;
+    visited_split_inline_uses_[user] = static_cast<int64_t>(offset);
     if (!present && output_inline_.count(user)) {
       Use u = user->output()->uses().at(0);
-      scanLongInlines(u.user, int64_t(u.offset) - 1, to_split_reversed);
+      scanLongInlines(u.user, u.offset - 1, to_split_reversed);
       // -1 because the actual use is still being
       // emitted so it cannot be split
     }
@@ -695,7 +696,7 @@ struct PythonPrintImpl {
     assignValuesToTheirUniqueNames(node->outputs());
     indent();
     // Print outputs
-    if (node->outputs().size() > 0) {
+    if (!node->outputs().empty()) {
       printValueList(body_, node->outputs());
       body_ << " = ";
     }
@@ -746,26 +747,28 @@ struct PythonPrintImpl {
   }
 
   void checkVersion(Node* node) {
-#if ENABLE_UPGRADERS
     if (auto schema = node->maybeSchema()) {
       auto schema_name = getFullSchemaName(*schema);
       auto version_entry = get_operator_version_map().find(schema_name);
       if (version_entry != get_operator_version_map().end()) {
         const auto& entry = version_entry->second;
-        // TODO (tugsuu) move this calculation into a seperate step.
-        min_version_ = std::max(
-            min_version_, uint64_t(entry[entry.size() - 1].bumped_at_version));
+        // TODO (tugsuu) move this calculation into a separate step.
+        uint64_t current_version = entry[entry.size() - 1].bumped_at_version;
+        uint64_t legacy_version_map_version =
+            get_min_version_for_kind(node->kind());
+
+        // True means we solely calculate based on upgrader version
+        if (get_version_calculator_flag()) {
+          min_version_ = std::max(min_version_, current_version);
+        } else {
+          if (legacy_version_map_version != 0) {
+            min_version_ = std::max(min_version_, legacy_version_map_version);
+          } else {
+            min_version_ = std::max(min_version_, current_version);
+          }
+        }
       }
     }
-    // We want to manually bump the minimum versions for
-    // other variants of aten::div and aten::full which
-    // are not covered by the new upgraders
-    min_version_ =
-        std::max(min_version_, get_min_version_for_kind(node->kind()));
-#else
-    min_version_ =
-        std::max(min_version_, get_min_version_for_kind(node->kind()));
-#endif
   }
 
   void printNode(Node* node, bool print_const) {
@@ -777,11 +780,12 @@ struct PythonPrintImpl {
     switch (node->kind()) {
       case prim::Return:
         if (enforce_importable_ && node->inputs().size() != 1) {
-          throw ErrorReport(node->sourceRange())
+          throw(
+              ErrorReport(node->sourceRange())
               << "Exportable methods must have a single return value. "
-              << "Normal use of ScriptMethods should enforce this";
+              << "Normal use of ScriptMethods should enforce this");
         }
-        if (node->inputs().size() > 0) {
+        if (!node->inputs().empty()) {
           indent();
           body_ << "return ";
           printValueList(body_, node->inputs());
@@ -802,7 +806,7 @@ struct PythonPrintImpl {
         // the unpack to be inserted when parsed back in:
         // a, b, = unpacked
         // a, = unpacked # trailing comma forces an unpack to happen
-        if (node->outputs().size() > 0) {
+        if (!node->outputs().empty()) {
           printValueList(body_, node->outputs(), "", ", = ");
         }
         body_ << useOf(node->input()) << "\n";
@@ -830,12 +834,26 @@ struct PythonPrintImpl {
         ss << "fork(" << name << ")";
         printOutputDefinition(node, ss.str());
       } break;
+      case prim::awaitable: {
+        // the subgraph gets emitted as another function
+        auto name = genName("__awaitable_function");
+        auto graph = node->g(attr::Subgraph);
+        indent();
+        body_ << "def " << name << "():\n";
+        for (size_t i = 0; i < node->inputs().size(); ++i) {
+          assignValue(graph->inputs().at(i), node->inputs().at(i));
+        }
+        printBody(graph->block());
+        std::stringstream ss;
+        ss << "awaitable(" << name << ")";
+        printOutputDefinition(node, ss.str());
+      } break;
       case prim::Enter: {
         const auto in = node->inputs().at(0);
         const auto out = node->outputs().at(0);
         indent();
         body_ << "with " << useOf(in);
-        if (out->uses().size() > 0) {
+        if (!out->uses().empty()) {
           assignValue(out, genUniqueNameFor(out));
           body_ << " as " << useOf(out);
         }
@@ -853,8 +871,9 @@ struct PythonPrintImpl {
       } break;
       case prim::Closure: {
         if (enforce_importable_) {
-          throw ErrorReport(node->sourceRange())
-              << "closures are not exportable";
+          throw(
+              ErrorReport(node->sourceRange())
+              << "closures are not exportable");
         }
         assignValuesToTheirUniqueNames(node->outputs());
         auto name = useOf(node->output())->str();
@@ -906,9 +925,13 @@ struct PythonPrintImpl {
     bool hasNonASCII = false;
     auto checkSubvalue = [&hasNonASCII](const IValue& val) {
       if (val.isString()) {
-        const auto maxASCII = 0x7fu;
-        for (auto c : val.toStringRef()) {
-          if (c > maxASCII) {
+        // char's type is implementation designed signedness, likely
+        // signed on x86 and unsigned on ARM. But as of C++11, it is
+        // guaranteed to be twos complement. Therefore, converting to
+        // signed char gives us a range of [-128, 127]. Thus, any
+        // negative number is non-ascii.
+        for (signed char c : val.toStringRef()) {
+          if (c < 0) {
             hasNonASCII = true;
             return true;
           }
@@ -975,11 +998,12 @@ struct PythonPrintImpl {
       case prim::PythonOp: {
         auto value = static_cast<const PythonOp*>(node);
         if (enforce_importable_) {
-          throw ErrorReport(node->sourceRange())
+          throw(
+              ErrorReport(node->sourceRange())
               << "Could not export Python function call '" << value->name()
               << "'. Remove calls to Python functions before export. "
               << "Did you forget to add @script or @script_method annotation? "
-              << "If this is a nn.ModuleList, add it to __constants__";
+              << "If this is a nn.ModuleList, add it to __constants__");
         }
         std::stringstream scalars_stream;
         stmt << "^" << value->name();
@@ -1053,7 +1077,7 @@ struct PythonPrintImpl {
         TypePtr elem_type = list_type->getElementType();
         // Empty lists must be annotated with their type so the compiler knows
         // what type is supposed to be inside them
-        if (node->inputs().size() == 0) {
+        if (node->inputs().empty()) {
           stmt << "annotate("
                << node->output()->type()->annotation_str(type_printer_)
                << ", [])";
@@ -1077,7 +1101,7 @@ struct PythonPrintImpl {
         //   - the dict is empty
         //   - the dict has potentially ambiguous element types
         //       (e.g. Tensor vs. Optional[Tensor])
-        if (node->inputs().size() == 0 ||
+        if (node->inputs().empty() ||
             !elementTypeCanBeInferredFromMembers(dict_type->getKeyType()) ||
             !elementTypeCanBeInferredFromMembers(dict_type->getValueType())) {
           stmt << "annotate("
@@ -1220,7 +1244,7 @@ struct PythonPrintImpl {
           auto num_necessary = specified_args.first;
           auto num_out = specified_args.second;
 
-          for (size_t i = 0; i < num_necessary; ++i) {
+          for (const auto i : c10::irange(static_cast<size_t>(num_necessary))) {
             if (i > 0)
               stmt << ", ";
             auto v = useOf(node->inputs().at(i));
@@ -1274,8 +1298,7 @@ struct PythonPrintImpl {
   IValue createBroadList(dtype value, const int64_t& N) {
     c10::List<dtype> repeated;
     repeated.reserve(N);
-    for (const auto i : c10::irange(N)) {
-      (void)i; // Suppress unused variable warning
+    for ([[maybe_unused]] const auto i : c10::irange(N)) {
       repeated.push_back(value);
     }
     return repeated;
@@ -1319,7 +1342,7 @@ struct PythonPrintImpl {
         printNode(n, /*print_const=*/true);
       }
       // Print body
-      printBlock(body, body->return_node()->inputs().size() > 0);
+      printBlock(body, !body->return_node()->inputs().empty());
       printNode(body->return_node(), /*print_const=*/false);
     }
   }
@@ -1431,7 +1454,7 @@ struct PythonPrintImpl {
         }
         body_ << "]\n";
         auto forwardPreHooks = classType->getForwardPreHooks();
-        if (forwardPreHooks.size() > 0) {
+        if (!forwardPreHooks.empty()) {
           indent();
           body_ << "__forward_pre_hooks__ = [";
           for (const auto& pre_hook : forwardPreHooks) {
@@ -1441,7 +1464,7 @@ struct PythonPrintImpl {
         }
 
         auto forwardHooks = classType->getForwardHooks();
-        if (forwardHooks.size() > 0) {
+        if (!forwardHooks.empty()) {
           indent();
           body_ << "__forward_hooks__ = [";
           for (const auto& hook : forwardHooks) {
@@ -1542,7 +1565,7 @@ struct PythonPrintImpl {
           indent();
           body_ << "def " << method.name() << "(self";
           TORCH_INTERNAL_ASSERT(
-              method.arguments().size() > 0 &&
+              !method.arguments().empty() &&
               method.arguments().at(0).name() == "self");
           for (const Argument& arg :
                at::ArrayRef<Argument>(method.arguments()).slice(1)) {
@@ -1562,7 +1585,7 @@ struct PythonPrintImpl {
     } else if (auto enumType = type->cast<EnumType>()) {
       body_ << "class " << enumType->qualifiedClassName().name() << "(Enum):\n";
 
-      std::string value_wrapper = "";
+      std::string value_wrapper;
       if (enumType->getValueType() == StringType::get()) {
         value_wrapper = "\"";
       }
@@ -1620,11 +1643,7 @@ struct PythonPrintImpl {
   bool enforce_importable_;
 
   // The least version that supports all printed ops
-#if ENABLE_UPGRADERS
   uint64_t min_version_ = caffe2::serialize::kMinSupportedFileFormatVersion;
-#else
-  uint64_t min_version_ = 0;
-#endif
 };
 
 PythonPrint::PythonPrint(
@@ -1662,9 +1681,7 @@ uint64_t PythonPrint::minVersion() const {
   return pImpl->min_version_;
 }
 
-PythonPrint::~PythonPrint() = default;
-
-std::vector<IValue> traverseIValueAndGetObjects(IValue ivalue) {
+static std::vector<IValue> traverseIValueAndGetObjects(const IValue& ivalue) {
   std::vector<IValue> result;
   std::vector<IValue> stack;
   stack.emplace_back(ivalue);
@@ -1701,7 +1718,7 @@ std::vector<IValue> traverseIValueAndGetObjects(IValue ivalue) {
   return result;
 }
 
-c10::optional<std::string> printType(
+static std::optional<std::string> printType(
     const c10::Type& type,
     torch::jit::TypeNameUniquer& type_name_uniquer) {
   if (auto dyn = type.castRaw<c10::DynamicType>()) {
@@ -1712,7 +1729,7 @@ c10::optional<std::string> printType(
   if (namedType && namedType->name()) {
     return type_name_uniquer.getUniqueName(namedType).qualifiedName();
   }
-  return c10::nullopt;
+  return std::nullopt;
 }
 
 void jitModuleToPythonCodeAndConstants(
@@ -1734,7 +1751,9 @@ void jitModuleToPythonCodeAndConstants(
     class_deps.add(class_type);
   }
 
-  for (int i = 0; i < class_deps.size(); ++i) {
+  for (size_t i = 0; i < class_deps.size(); ++i) {
+    // note: PythonPrint may extend class_deps, so re-checking .size() is
+    // necessary
     auto type = class_deps[i];
     auto qualname = uniquer.getUniqueName(type);
     std::string qualifier = qualname.prefix();
@@ -1757,5 +1776,4 @@ void jitModuleToPythonCodeAndConstants(
   }
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

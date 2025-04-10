@@ -4,10 +4,10 @@
 #include <pybind11/pytypes.h>
 #include <torch/csrc/jit/python/pybind_utils.h>
 #include <torch/csrc/jit/python/python_list.h>
+#include <torch/csrc/utils/pybind.h>
 #include <stdexcept>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 IValue ScriptListIterator::next() {
   if (iter_ == end_) {
@@ -63,7 +63,7 @@ void initScriptListBindings(PyObject* module) {
       .def(py::init([](py::list list) {
         TypePtr type = nullptr;
 
-        if (list.size() > 0) {
+        if (!list.empty()) {
           // If the source list is nonempty, try to infer its type.
           auto inferred_type = tryToInferType(list);
 
@@ -96,7 +96,7 @@ void initScriptListBindings(PyObject* module) {
       .def(
           "__len__",
           [](const std::shared_ptr<ScriptList>& self) {
-            return toPyObject(self->len());
+            return toPyObject(static_cast<int64_t>(self->len()));
           })
       .def(
           "__contains__",
@@ -134,9 +134,9 @@ void initScriptListBindings(PyObject* module) {
 
             auto seq = std::make_shared<ScriptList>(self->type());
 
-            for (const auto i : c10::irange(slicelength)) {
-              (void)i; // Suppress unused variable warning
-              seq->append(self->getItem(start));
+            for ([[maybe_unused]] const auto i [[maybe_unused]] :
+                 c10::irange(slicelength)) {
+              seq->append(self->getItem(static_cast<ptrdiff_t>(start)));
               start += step;
             }
 
@@ -177,7 +177,8 @@ void initScriptListBindings(PyObject* module) {
             for (const auto i : c10::irange(slicelength)) {
               try {
                 self->setItem(
-                    start, toIValue(value[i], self->type()->getElementType()));
+                    static_cast<ptrdiff_t>(start),
+                    toIValue(value[i], self->type()->getElementType()));
               } catch (const py::cast_error& e) {
                 throw py::type_error();
               }
@@ -289,7 +290,7 @@ void initScriptListBindings(PyObject* module) {
           [](py::list list) { // __setstate__
             TypePtr type = nullptr;
 
-            if (list.size() > 0) {
+            if (!list.empty()) {
               // If the source list is nonempty, try to infer its type.
               auto inferred_type = tryToInferType(list);
 
@@ -312,5 +313,4 @@ void initScriptListBindings(PyObject* module) {
           }));
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

@@ -1,4 +1,5 @@
-#include <ATen/ATen.h>
+#define TORCH_ASSERT_ONLY_METHOD_OPERATORS
+#include <ATen/core/Tensor.h>
 #include <ATen/Parallel.h>
 #include <torch/custom_class.h>
 #include <torch/library.h>
@@ -7,8 +8,14 @@
 #include <ATen/native/ao_sparse/quantized/cpu/packed_params.h>
 #include <c10/util/irange.h>
 
-namespace ao {
-namespace sparse {
+#ifndef AT_PER_OPERATOR_HEADERS
+#include <ATen/Functions.h>
+#else
+#include <ATen/ops/_empty_affine_quantized.h>
+#include <ATen/ops/empty.h>
+#endif
+
+namespace ao::sparse {
 
 int register_linear_params();
 
@@ -93,7 +100,7 @@ at::Tensor PackedLinearWeight::apply_impl(
   // 2. If the input tensor is {x, batch_size, K}, the output tensor is {x,
   // batch_size, out_channels}.
   std::vector<int64_t> out_sizes = input.sizes().vec();
-  out_sizes.back() = out_channels; // NOLINT
+  out_sizes.back() = out_channels;
   // Allocate output Tensor and a buffer for fbgemmPacked to use
   auto output_tr = at::_empty_affine_quantized(
       out_sizes,
@@ -239,6 +246,7 @@ class QLinearInt8 final {
 };
 
 TORCH_LIBRARY_IMPL(sparse, QuantizedCPU, m) {
+  register_linear_params();
   m.impl(
       TORCH_SELECTIVE_NAME("sparse::qlinear"),
       TORCH_FN(QLinearInt8<false>::run));
@@ -248,4 +256,4 @@ TORCH_LIBRARY_IMPL(sparse, QuantizedCPU, m) {
 }
 
 } // namespace
-}} // namespace ao::sparse
+} // namespace ao::sparse

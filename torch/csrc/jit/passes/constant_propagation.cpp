@@ -13,12 +13,12 @@
 #include <torch/csrc/jit/passes/dead_code_elimination.h>
 #include <torch/csrc/jit/runtime/operator.h>
 #include <torch/csrc/jit/runtime/vararg_functions.h>
-#include <torch/csrc/utils/memory.h>
 
-namespace torch {
-namespace jit {
+#include <utility>
 
-c10::optional<std::vector<IValue>> runNodeIfInputsAreConstant(
+namespace torch::jit {
+
+std::optional<std::vector<IValue>> runNodeIfInputsAreConstant(
     const Node* n,
     bool ignore_custom_classes,
     AliasDb* db) {
@@ -27,21 +27,21 @@ c10::optional<std::vector<IValue>> runNodeIfInputsAreConstant(
     if (auto ival = toIValue(input)) {
       stack.push_back(*ival);
     } else {
-      return c10::nullopt;
+      return std::nullopt;
     }
   }
 
   switch (n->kind()) {
     case prim::ListUnpack: {
       if (stack.back().toList().size() != n->outputs().size()) {
-        return c10::nullopt;
+        return std::nullopt;
       }
       listUnpack(stack, n->outputs().size());
     } break;
     case prim::TupleConstruct: {
       auto tt = n->output()->type()->expect<TupleType>();
       if (tt->name()) {
-        namedTupleConstruct(stack, tt, n->inputs().size());
+        namedTupleConstruct(stack, std::move(tt), n->inputs().size());
       } else {
         tupleConstruct(stack, n->inputs().size());
       }
@@ -77,14 +77,14 @@ c10::optional<std::vector<IValue>> runNodeIfInputsAreConstant(
         // vararg schemas require the number of inputs at the top of the stack
         // but this is broken in other places in constant prop, so disable it
         // for now
-        return c10::nullopt;
+        return std::nullopt;
       }
 
       try {
         auto op = n->getOperation();
         op(stack);
       } catch (...) {
-        return c10::nullopt;
+        return std::nullopt;
       }
     } break;
   }
@@ -94,13 +94,13 @@ c10::optional<std::vector<IValue>> runNodeIfInputsAreConstant(
       const at::Tensor& t = v.toTensor();
       if (t.defined() && t.requires_grad()) {
         // requires grad tensors cannot be constants
-        return c10::nullopt;
+        return std::nullopt;
       }
     }
     // Weak form of const propagation
     if (ignore_custom_classes) {
       if (v.isCustomClass()) {
-        return c10::nullopt;
+        return std::nullopt;
       }
     }
     // see [Constant Object Weak CompilationUnit Reference]
@@ -122,7 +122,7 @@ c10::optional<std::vector<IValue>> runNodeIfInputsAreConstant(
     }
     if (v.isObject()) {
       if (!v.toObject()->is_weak_compilation_ref()) {
-        return c10::nullopt;
+        return std::nullopt;
       }
     }
   }
@@ -142,6 +142,7 @@ std::unordered_set<Symbol> skip_list = {
     prim::profile,
     prim::profile_ivalue,
     prim::unchecked_unwrap_optional, // TODO remove
+    prim::awaitable,
     aten::dequantize,
     // TODO (zach): we should consider skipping tensor factories in the cases
     // where the constant tensor would be large but cheap to create.
@@ -172,10 +173,9 @@ struct ConstantPropagator {
       std::shared_ptr<Graph> graph,
       bool aliasing_types,
       bool ignore_custom_classes)
-      : graph_(std::move(graph)) {
-    aliasing_types_ = aliasing_types;
-    ignore_custom_classes_ = ignore_custom_classes;
-  }
+      : graph_(std::move(graph)),
+        aliasing_types_(aliasing_types),
+        ignore_custom_classes_(ignore_custom_classes) {}
 
   void propagateNode(Node* n) {
     std::vector<IValue> outputs;
@@ -347,8 +347,7 @@ struct ConstantPropagator {
   }
 
   bool supportedNode(Node* n) {
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    bool no_mutation;
+    bool no_mutation = false;
     if (aliasing_types_) {
       no_mutation = !getOrCreateAliasDb()->hasWriters(n);
     } else {
@@ -357,7 +356,7 @@ struct ConstantPropagator {
     }
     return no_mutation && !n->kind().is_onnx() &&
         skip_list.count(n->kind()) == 0 && !n->isNondeterministic() &&
-        !n->hasSideEffects() && n->blocks().size() == 0;
+        !n->hasSideEffects() && n->blocks().empty();
   }
 
   void ConstantPropagation(at::ArrayRef<Block*> blocks) {
@@ -433,5 +432,4 @@ bool ConstantPropagationImmutableTypes(std::shared_ptr<Graph>& graph) {
   return made_change;
 }
 
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit
